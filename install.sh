@@ -68,6 +68,16 @@ on_unexpected_error() {
 }
 trap 'on_unexpected_error "$?" "$LINENO"' ERR
 
+on_interrupted() {
+  local code="$1"
+  trap - INT TERM
+  warn "Установка прервана сигналом; шаг: $STEP. Некоторые изменения уже могут быть применены."
+  recovery_hint
+  exit "$code"
+}
+trap 'on_interrupted 130' INT
+trap 'on_interrupted 143' TERM
+
 # Retry only operations that can be safely attempted again in THIS process.
 # Never silently skip firewall, SSH protection or Xray failures.
 retry_command() {
