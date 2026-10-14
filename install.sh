@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Araucaria VPS Manager v0.1 - for a NEW Ubuntu 22.04 / 24.04 VPS.
+# Araucaria VPS Manager v0.2 - for a NEW Ubuntu 22.04 / 24.04 VPS.
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -70,7 +70,7 @@ esac
 command -v systemctl >/dev/null || die 'Нужен systemd.'
 [[ -d /run/systemd/system ]] || die 'systemd не запущен. Это не обычный VPS с systemd.'
 
-for existing in /usr/local/bin/xray /etc/systemd/system/xray.service /etc/araucaria/settings.json /usr/local/bin/araucaria /usr/local/bin/vless-link /usr/local/bin/vless-rotate; do
+for existing in /usr/local/bin/xray /etc/systemd/system/xray.service /etc/araucaria/settings.json /usr/local/bin/araucaria /usr/local/bin/vless-link /usr/local/bin/vless-rotate /usr/local/bin/vless-port; do
   [[ ! -e "$existing" && ! -L "$existing" ]] || die "Обнаружен $existing. Установщик предназначен для чистого VPS и ничего не перезапишет."
 done
 id araucaria-xray >/dev/null 2>&1 && die 'Пользователь araucaria-xray уже существует. Отмена во избежание конфликта.'
@@ -115,6 +115,22 @@ if [[ "$ASSUME_YES" == 'no' ]]; then
   [[ -t 0 ]] || die 'Нет интерактивного терминала. Для явного согласия используй --yes.'
   read -r -p 'Продолжить установку на НОВОМ VPS? Напиши yes: ' answer
   [[ "$answer" == 'yes' ]] || die 'Установка отменена.'
+fi
+
+STEP='жёлтое приглашение терминала'
+say 'Настраиваем жёлтые имя root и hostname в Bash (Termius/SSH)...'
+# Modify root's shell only. Do not delete Ubuntu's original bashrc sections.
+# Marker prevents duplicate settings; the change applies to the NEXT shell.
+if ! grep -Fq '# >>> Araucaria shell prompt >>>' /root/.bashrc 2>/dev/null; then
+  cat >> /root/.bashrc <<'EOF'
+
+# >>> Araucaria shell prompt >>>
+# Yellow username + hostname, ordinary directory; interactive Bash only.
+case $- in
+  *i*) PS1='\[\e[1;33m\]➜ \u@\h\[\e[0m\]:\w\$ ' ;;
+esac
+# <<< Araucaria shell prompt <<<
+EOF
 fi
 
 STEP='обновление пакетов'
@@ -222,10 +238,11 @@ EOF
 systemctl daemon-reload
 
 STEP='установка Araucaria'
-say 'Ставим araucaria, vless-link и vless-rotate...'
+say 'Ставим araucaria, vless-link, vless-rotate и vless-port...'
 install -m 0755 "$SCRIPT_DIR/araucaria.py" /usr/local/bin/araucaria
 ln -s /usr/local/bin/araucaria /usr/local/bin/vless-link
 ln -s /usr/local/bin/araucaria /usr/local/bin/vless-rotate
+ln -s /usr/local/bin/araucaria /usr/local/bin/vless-port
 
 STEP='создание и применение REALITY'
 /usr/local/bin/araucaria init --port "$XRAY_PORT" --target "$TARGET" --name "$PROFILE_NAME"
@@ -239,12 +256,33 @@ EOF
 
 STEP='проверка состояния'
 /usr/local/bin/araucaria status
-say 'Установка завершена!'
-printf '\nКоманды:\n  vless-link       — вывести актуальную ссылку\n  vless-rotate     — сменить UUID, ключи и Short ID\n  araucaria status — проверить службы\n'
-printf '\nТекущую SSH-сессию НЕ закрывай, пока не проверишь второй вход!\n'
-if [[ -f /var/run/reboot-required ]]; then
-  warn 'Ubuntu сообщает, что для обновлений потребуется перезагрузка. Не спеши: сперва проверь SSH-доступ.'
-fi
+
+# An explicit post-install report instead of an unexplained "done" message.
+printf '\n\033[1;36m%s\033[0m\n' '============================================================'
+printf '\033[1;36m%s\033[0m\n' '  ARAUCARIA | ЧТО СДЕЛАНО ПРИ УСТАНОВКЕ'
+printf '\033[1;36m%s\033[0m\n' '============================================================'
+printf '  [OK] Ubuntu %s: пакеты обновлены; утилиты установлены\n' "$VERSION_ID"
+printf '  [OK] UFW: разрешены SSH (%s/tcp) и VLESS (%s/tcp)\n' "${SSH_PORTS[*]}" "$XRAY_PORT"
+printf '  [OK] Fail2ban SSH: %s\n' "$([[ "$F2B_MODE" == strict ]] && echo '2 попытки/3 мин -> 72 ч' || echo '5 попыток/10 мин -> 12 ч')"
+printf '  [OK] Xray-core: VLESS + REALITY, TCP, Vision\n'
+printf '  [OK] SNI: %s; профиль: %s\n' "$TARGET" "$PROFILE_NAME"
+printf '  [OK] Xray: отдельный системный пользователь araucaria-xray\n'
+printf '  [OK] Автоматические обновления безопасности Ubuntu\n'
+printf '  [OK] Генерация ссылок, смена ключей и порта, резервные копии\n'
+printf '  [OK] Жёлтое приглашение root в Bash (в новом SSH-сеансе)\n'
+printf '  [НЕ МЕНЯЛИ] Пароль SSH и разрешение входа под root\n'
+printf '%s\n' '------------------------------------------------------------'
+printf '\n\033[1;36m%s\033[0m\n' '  ARAUCARIA | ГОТОВАЯ ССЫЛКА'
+printf '%s\n' '------------------------------------------------------------'
 if ! /usr/local/bin/araucaria link; then
   warn 'Сервис работает, но ссылка не сформировалась автоматически. Используй: vless-link --ip ПУБЛИЧНЫЙ_IP_VPS'
+fi
+
+# This block is separate so the operator can find the commands at a glance.
+/usr/local/bin/araucaria commands
+printf 'ВАЖНО: не закрывай текущую SSH-сессию до проверки второго входа!\n'
+printf 'Цвет имени появится после нового входа (или: source /root/.bashrc).\n'
+printf 'Новая VLESS-ссылка секретная — не публикуй её.\n'
+if [[ -f /var/run/reboot-required ]]; then
+  warn 'Ubuntu сообщает, что для обновлений потребуется перезагрузка. Не спеши: сперва проверь SSH-доступ.'
 fi
