@@ -176,7 +176,7 @@ printf '  Ubuntu:      %s\n  SSH-порты:   %s\n  VLESS порт:  %s/tcp\n  
 warn 'Вход под root и пароль SSH не меняются. Держи текущее SSH-подключение открытым до повторной проверки!'
 if [[ "$ASSUME_YES" == 'no' ]]; then
   [[ -t 0 ]] || die 'Нет интерактивного терминала. Для явного согласия используй --yes.'
-  read -r -p 'Продолжить установку на НОВОМ VPS? Напиши yes: ' answer
+  read -r -p 'Продолжить установку? Напиши yes: ' answer
   [[ "$answer" == 'yes' ]] || die 'Установка отменена.'
 fi
 
@@ -349,7 +349,7 @@ fi
 # This block is separate so the operator can find the commands at a glance.
 /usr/local/bin/araucaria commands
 printf 'ВАЖНО: не закрывай текущую SSH-сессию до проверки второго входа!\n'
-printf 'Цвет имени появится после нового входа (или: source /root/.bashrc).\n'
+printf '\n\033[1;33m[ПОДСКАЗКА: ЦВЕТ ТЕРМИНАЛА]\033[0m\n'\nprintf 'В этой SSH-сессии цвет пока не изменился: установщик запущен отдельным Bash.\n'\nprintf 'Чтобы включить жёлтое имя прямо сейчас, выполни после установки:\n'\nprintf '  source /root/.bashrc\n'\nprintf 'В следующем SSH-сеансе цвет загрузится автоматически.\n'
 printf 'Новая VLESS-ссылка секретная — не публикуй её.\n'
 if [[ -f /var/run/reboot-required ]]; then
   warn 'Ubuntu сообщает, что для обновлений потребуется перезагрузка. Не спеши: сперва проверь SSH-доступ.'
