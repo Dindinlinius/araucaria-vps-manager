@@ -111,6 +111,8 @@ class ManagerFilesystemTests(unittest.TestCase):
         self.lock = base / 'lock'
         self.config.write_text('{}\n')
         patchers = [
+            # These are isolated filesystem tests, not root-required system operations.
+            mock.patch.object(a, 'require_root'),
             mock.patch.object(a, 'CONFIG_FILE', self.config),
             mock.patch.object(a, 'SETTINGS_FILE', self.settings),
             mock.patch.object(a, 'BACKUP_DIR', self.backups),
