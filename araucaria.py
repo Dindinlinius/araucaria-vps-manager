@@ -390,6 +390,50 @@ def show_link(args):
     print('\n=====================================\n')
 
 
+def rename_vless(args):
+    """Update only the link display label, without touching Xray or its keys."""
+    require_root()
+    with exclusive_lock():
+        find_inbound(read_json(CONFIG_FILE))
+        settings = read_json(SETTINGS_FILE)
+        previous = validate_name(settings.get('name', DEFAULT_NAME))
+
+        print('\n' + '=' * 58)
+        print('  ARAUCARIA | ПЕРЕИМЕНОВАНИЕ VLESS-СЫЛКИ')
+        print('=' * 58)
+        print(f'  Текущее имя: {previous}')
+        if args.name is None:
+            if not sys.stdin.isatty():
+                raise AraucariaError('Укажи новое имя: vless-name "Название VPN"')
+            try:
+                requested = input('  Новое имя (русский, пробелы, до 64 символов): ')
+            except EOFError:
+                raise AraucariaError('Ввод отменён.')
+        else:
+            requested = args.name
+        new_name = validate_name(requested)
+
+        if new_name == previous:
+            print('  Название не изменилось. Настройки сохранены.')
+            return
+        settings['name'] = new_name
+        save_json_private(SETTINGS_FILE, settings)
+
+    print('\n' + '=' * 58)
+    print('  НАЗВАНИЕ ССЫЛКИ ОБНОВЛЕНО')
+    print('=' * 58)
+    print(f'  Было:            {previous}')
+    print(f'  Стало:           {new_name}')
+    print('  Xray/ключи/порт: без изменений; перезапуск не нужен')
+    print('  Важно: переимпортируй ссылку в клиент, чтобы увидеть новое имя.')
+    print('=' * 58)
+    try:
+        show_link(args)
+    except AraucariaError as exc:
+        print(f'Название сохранено, но ссылка не выведена: {exc}', file=sys.stderr)
+        print('Используй: vless-link --ip ПУБЛИЧНЫЙ_IP', file=sys.stderr)
+
+
 def show_status(args):
     config = read_json(CONFIG_FILE)
     inbound = find_inbound(config)
@@ -620,6 +664,8 @@ def show_commands(_args=None):
     print('  vless-port           Выбрать новый порт (yes или число)')
     print('  vless-port --random  Выбрать случайный порт без вопроса')
     print('  vless-port 38421     Указать порт без вопроса')
+    print('  vless-name           Переименовать профиль (интерактивно)')
+    print('  vless-name "Мой VPN" Переименовать профиль сразу')
     print('  araucaria status     Проверить Xray, UFW и Fail2ban')
     print('  araucaria commands   Показать это меню команд')
     print('  araucaria --help     Полная справка')
@@ -644,6 +690,9 @@ def create_parser():
     port_p.add_argument('port', nargs='?', type=int, help='Выбрать TCP-порт 1024–65535')
     port_p.add_argument('--random', action='store_true', help='Случайный свободный порт 20000–60000')
     port_p.add_argument('--ip', help='Внешний IPv4 для готовой ссылки')
+    name_p = commands.add_parser('name', help='Переименовать VLESS-ссылку без перезапуска Xray')
+    name_p.add_argument('name', nargs='?', help='Новое имя (до 64 символов, в кавычках если есть пробелы)')
+    name_p.add_argument('--ip', help='Внешний IPv4 для готовой ссылки')
     commands.add_parser('commands', help='Показать команды управления')
     return p
 
@@ -658,6 +707,8 @@ def main(argv=None):
             argv = ['rotate', *argv]
         elif invoked == 'vless-port':
             argv = ['port', *argv]
+        elif invoked == 'vless-name':
+            argv = ['name', *argv]
     parser = create_parser()
     args = parser.parse_args(argv)
     if not args.action:
@@ -665,7 +716,7 @@ def main(argv=None):
         return 0
     try:
         {'init': init, 'rotate': rotate, 'link': show_link,
-         'status': show_status, 'port': switch_vless_port,
+         'status': show_status, 'port': switch_vless_port, 'name': rename_vless,
          'commands': show_commands}[args.action](args)
     except AraucariaError as exc:
         print(f'Ошибка: {exc}', file=sys.stderr)
