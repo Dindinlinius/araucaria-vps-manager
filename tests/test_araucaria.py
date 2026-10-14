@@ -337,9 +337,30 @@ class PortChangeTests(unittest.TestCase):
     def test_interactive_yes_selects_random_port_and_prints_busy_ports(self):
         with mock.patch.object(a.secrets, 'randbelow', return_value=13333):
             output = self.call_change(port=None, with_input='yes')
-        self.assertEqual(self.allowed, {33333})
+        self.assertEqual(self.allowed, {14357})
         self.assertIn('22, 2022, 56399', output)
         self.assertIn('Допустимый диапазон', output)
+        self.assertIn('1024–65535', output)
+
+    def test_random_port_can_choose_lowest_and_highest_allowed(self):
+        with (mock.patch.object(a.secrets, 'randbelow', return_value=0),
+              mock.patch.object(a, 'port_bindable', return_value=True)):
+            self.assertEqual(a.random_available_port(set()), 1024)
+        with (mock.patch.object(a.secrets, 'randbelow', return_value=65535 - 1024),
+              mock.patch.object(a, 'port_bindable', return_value=True)):
+            self.assertEqual(a.random_available_port(set()), 65535)
+
+    def test_random_port_skips_unavailable_ports(self):
+        with (mock.patch.object(a.secrets, 'randbelow', side_effect=[2022-1024, 56399-1024, 38421-1024]),
+              mock.patch.object(a, 'port_bindable', return_value=True)):
+            output = self.call_change(port=None, random=True)
+        self.assertEqual(self.allowed, {38421})
+        self.assertIn('38421', output)
+
+    def test_random_port_rejects_ports_with_failed_bind(self):
+        with (mock.patch.object(a.secrets, 'randbelow', side_effect=[2222-1024, 40000-1024]),
+              mock.patch.object(a, 'port_bindable', side_effect=[False, True])):
+            self.assertEqual(a.random_available_port(set(), attempts=2), 40000)
 
     def test_ufw_status_requires_managed_old_port(self):
         self.allowed.clear()
@@ -355,6 +376,14 @@ class PortChangeTests(unittest.TestCase):
         self.assertFalse(ns.random)
         ns = p.parse_args(['port', '--random'])
         self.assertTrue(ns.random)
+
+    def test_name_command_cli_registered(self):
+        p = a.create_parser()
+        ns = p.parse_args(['name', 'Мой VPN'])
+        self.assertEqual(ns.action, 'name')
+        self.assertEqual(ns.name, 'Мой VPN')
+        ns = p.parse_args(['name'])
+        self.assertIsNone(ns.name)
 
 
 
