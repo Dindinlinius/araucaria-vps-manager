@@ -32,9 +32,14 @@ class ConfigTests(unittest.TestCase):
 
     def test_bad_profile_names_are_rejected(self):
         for name in ['', '    ', 'a' * 65, '🌲' * 60, 'foo\nbar',
-                     '\x1b[31m', 'hidden\u200btext', 'odd\u202e_name']:
+                     '\x1b[31m', 'hidden\u200btext', 'odd\u202e_name', 'Tara\rbar']:
             with self.subTest(name=name), self.assertRaises(a.AraucariaError):
                 a.validate_name(name)
+
+    def test_name_accepts_normal_ascii_and_trailing_carriage_return(self):
+        self.assertEqual(a.validate_name('Tarabar'), 'Tarabar')
+        self.assertEqual(a.validate_name('Tarabar\r'), 'Tarabar')
+        self.assertEqual(a.validate_name('Tarabar\r\r'), 'Tarabar')
 
     def test_make_config_matches_current_reality_layout(self):
         with mock.patch.object(a, 'get_x25519_pair', return_value='PRIVATE'):
