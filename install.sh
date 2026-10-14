@@ -261,7 +261,11 @@ STEP='проверка состояния'
 printf '\n\033[1;36m%s\033[0m\n' '============================================================'
 printf '\033[1;36m%s\033[0m\n' '  ARAUCARIA | ЧТО СДЕЛАНО ПРИ УСТАНОВКЕ'
 printf '\033[1;36m%s\033[0m\n' '============================================================'
-printf '  [OK] Ubuntu %s: пакеты обновлены; утилиты установлены\n' "$VERSION_ID"
+if [[ "$DO_UPGRADE" == 'yes' ]]; then
+  printf '  [OK] Ubuntu %s: пакеты обновлены; утилиты установлены\n' "$VERSION_ID"
+else
+  printf '  [OK] Ubuntu %s: списки пакетов обновлены; upgrade пропущен\n' "$VERSION_ID"
+fi
 printf '  [OK] UFW: разрешены SSH (%s/tcp) и VLESS (%s/tcp)\n' "${SSH_PORTS[*]}" "$XRAY_PORT"
 printf '  [OK] Fail2ban SSH: %s\n' "$([[ "$F2B_MODE" == strict ]] && echo '2 попытки/3 мин -> 72 ч' || echo '5 попыток/10 мин -> 12 ч')"
 printf '  [OK] Xray-core: VLESS + REALITY, TCP, Vision\n'
