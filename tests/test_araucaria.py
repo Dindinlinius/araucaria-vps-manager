@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -394,6 +395,34 @@ class PortChangeTests(unittest.TestCase):
 
 
 
+
+class InstallerPresentationTests(unittest.TestCase):
+    """Smoke-check installer prompts without provisioning a VPS."""
+
+    def test_confirmation_is_generic(self):
+        installer = (MODULE_PATH.parent / 'install.sh').read_text(encoding='utf-8')
+        self.assertIn("Продолжить установку? Напиши yes:", installer)
+        self.assertNotIn("Продолжить установку на НОВОМ VPS?", installer)
+
+    def test_shell_prompt_becomes_yellow_after_sourcing_new_bash(self):
+        installer = (MODULE_PATH.parent / 'install.sh').read_text(encoding='utf-8')
+        start_marker = "cat >> /root/.bashrc <<'EOF'\n"
+        end_marker = "\n# <<< Araucaria shell prompt <<<"
+        start = installer.index(start_marker) + len(start_marker)
+        end = installer.index(end_marker, start) + len(end_marker)
+        snippet = installer[start:end]
+        with tempfile.TemporaryDirectory() as temp:
+            script_path = Path(temp) / 'prompt.sh'
+            script_path.write_text(snippet + '\n', encoding='utf-8')
+            command = f"source {shlex.quote(str(script_path))}; printf 'CURRENT_PS1:%s\\n' \"$PS1\""
+            result = subprocess.run(
+                ['bash', '--noprofile', '--norc', '-ic', command],
+                capture_output=True, text=True, timeout=10
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('CURRENT_PS1:', result.stdout)
+        self.assertIn(r'\[\e[1;33m\]', result.stdout)
+        self.assertIn(r'\u@\h', result.stdout)
 
 class InstallerNamePromptTests(unittest.TestCase):
     """Run the actual installer name-prompt section without changing the VPS."""
