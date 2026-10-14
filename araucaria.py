@@ -6,6 +6,7 @@ Only Python 3 standard-library modules are used.
 
 import argparse
 import contextlib
+import copy
 import fcntl
 import ipaddress
 import json
@@ -383,6 +384,226 @@ def show_status(args):
             print('Команда недоступна')
 
 
+
+def listening_tcp_ports():
+    """Return TCP LISTEN ports, including listeners bound to IPv6 or loopback."""
+    try:
+        output = run('ss', '-H', '-ltn', capture=True).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise AraucariaError(f'Не удалось прочитать занятые TCP-порты (ss): {exc}')
+    ports = set()
+    for line in (output or '').splitlines():
+        columns = line.split()
+        if len(columns) < 4:
+            continue
+        possible = columns[3].rsplit(':', 1)[-1]
+        if possible.isascii() and possible.isdecimal():
+            ports.add(int(possible))
+    return ports
+
+
+def port_bindable(port):
+    """An additional check, since a new TCP listener may appear after `ss`."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(('0.0.0.0', port))
+        return True
+    except OSError:
+        return False
+
+
+def ufw_status():
+    try:
+        result = run('ufw', 'status', capture=True)
+        return result.stdout or ''
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise AraucariaError(f'Не удалось проверить UFW: {exc}')
+
+
+def ufw_port_rules(status, port):
+    pattern = re.compile(r'^\s*' + re.escape(str(port)) + r'/tcp(?:\s|\()')
+    return [line for line in status.splitlines() if pattern.match(line)]
+
+
+def ufw_ports_in_rules(status):
+    return {int(m.group(1)) for line in status.splitlines()
+            if (m := re.match(r'^\s*(\d+)/tcp(?:\s|\()', line))}
+
+
+def ufw_managed_allow(status, port):
+    return any('ALLOW' in line and 'Araucaria REALITY' in line
+               for line in ufw_port_rules(status, port))
+
+
+def call_ufw(*args):
+    try:
+        run('ufw', *args)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise AraucariaError(f'Команда UFW не выполнилась: ufw {" ".join(args)}: {exc}')
+
+
+def choose_vless_port(args, old_port, unavailable):
+    if args.port is not None and args.random:
+        raise AraucariaError('Выбери либо конкретный порт, либо --random.')
+
+    print('\n' + '=' * 58)
+    print('  ARAUCARIA | СМЕНА ПОРТА VLESS + REALITY')
+    print('=' * 58)
+    print(f'Текущий порт:      {old_port}/tcp')
+    print('Допустимый диапазон: 1024–65535')
+    print('Случайный порт:      20000–60000')
+    occupied = sorted(listening_tcp_ports())
+    shown = ', '.join(map(str, occupied[:35])) or 'нет'
+    suffix = f' ... и ещё {len(occupied) - 35}' if len(occupied) > 35 else ''
+    print(f'Занятые TCP-порты (LISTEN): {shown}{suffix}')
+    print('Занятые правилами UFW порты тоже не будут выбраны.')
+
+    if args.random:
+        selection = 'yes'
+    elif args.port is not None:
+        selection = str(args.port)
+    else:
+        if not sys.stdin.isatty():
+            raise AraucariaError('Нужен терминал. Или укажи: vless-port --random / vless-port 38421')
+        try:
+            selection = input('\nyes — случайный порт, или введи номер порта: ').strip().lower()
+        except EOFError:
+            raise AraucariaError('Ввод отменён.')
+
+    if selection == 'yes':
+        for _ in range(2000):
+            candidate = 20000 + secrets.randbelow(40001)
+            if candidate not in unavailable and port_bindable(candidate):
+                return candidate
+        raise AraucariaError('Не удалось подобрать свободный TCP-порт.')
+
+    if not re.fullmatch(r'[0-9]{1,5}', selection):
+        raise AraucariaError('Введи yes либо число от 1024 до 65535.')
+    candidate = validate_port(int(selection))
+    if candidate == old_port:
+        raise AraucariaError('Это уже текущий порт. Ничего менять не нужно.')
+    if candidate in unavailable or not port_bindable(candidate):
+        raise AraucariaError(f'Порт {candidate} занят или имеет правило UFW. Выбери другой.')
+    return candidate
+
+
+def switch_vless_port(args):
+    """Open new firewall port -> switch tested Xray -> close old port.
+
+    On failure, attempt rollback and do not silently abandon a running service.
+    """
+    require_root()
+    with exclusive_lock():
+        original = read_json(CONFIG_FILE)
+        inbound = find_inbound(original)
+        validate_inbound(inbound)
+        old_port = int(inbound['port'])
+        status = ufw_status()
+        if not re.search(r'^Status: active\s*$', status, re.M):
+            raise AraucariaError('UFW не активен. Не можем гарантировать безопасную смену порта.')
+        if not ufw_managed_allow(status, old_port):
+            raise AraucariaError(
+                f'Нет правила UFW Araucaria REALITY для старого порта {old_port}. '
+                'Сначала проверь ufw status; автоматическое удаление чужих правил запрещено.'
+            )
+
+        occupied = listening_tcp_ports()
+        forbidden = occupied | ufw_ports_in_rules(status) | {old_port}
+        new_port = choose_vless_port(args, old_port, forbidden)
+
+        # No live changes have occurred up to here.
+        replacement = copy.deepcopy(original)
+        find_inbound(replacement)['port'] = new_port
+        print(f'\nПереключаем {old_port}/tcp -> {new_port}/tcp...')
+
+        try:
+            call_ufw('allow', f'{new_port}/tcp', 'comment', 'Araucaria REALITY')
+        except AraucariaError as exc:
+            # Even a failed UFW command may have already added IPv4/IPv6 rules.
+            try:
+                if ufw_port_rules(ufw_status(), new_port):
+                    call_ufw('--force', 'delete', 'allow', f'{new_port}/tcp')
+            except AraucariaError as cleanup_exc:
+                raise AraucariaError(
+                    f'Ошибка открытия нового порта: {exc}. '
+                    f'Проверь возможное оставшееся правило {new_port}/tcp: {cleanup_exc}'
+                ) from exc
+            raise
+        try:
+            if not ufw_managed_allow(ufw_status(), new_port):
+                raise AraucariaError('Новое правило UFW не обнаружено после добавления.')
+            backup = apply_config(replacement)
+        except Exception as exc:
+            try:
+                call_ufw('--force', 'delete', 'allow', f'{new_port}/tcp')
+            except AraucariaError as cleanup_exc:
+                raise AraucariaError(
+                    f'Xray не переключился: {exc}. '
+                    f'Не удалось удалить новое правило {new_port}/tcp: {cleanup_exc}'
+                ) from exc
+            raise AraucariaError(f'Переключение Xray отменено, новый порт закрыт: {exc}') from exc
+
+        try:
+            call_ufw('--force', 'delete', 'allow', f'{old_port}/tcp')
+            if ufw_port_rules(ufw_status(), old_port):
+                raise AraucariaError('После удаления старый порт всё ещё присутствует в правилах UFW.')
+        except Exception as exc:
+            # Restore firewall access to the previous port before restoring Xray.
+            try:
+                if not ufw_managed_allow(ufw_status(), old_port):
+                    call_ufw('allow', f'{old_port}/tcp', 'comment', 'Araucaria REALITY')
+                apply_config(original)
+            except Exception as rollback_exc:
+                raise AraucariaError(
+                    f'Не удалось закрыть старый порт: {exc}. '
+                    f'АВТОВОССТАНОВЛЕНИЕ НЕ УДАЛОСЬ: {rollback_exc}. '
+                    f'Новый порт {new_port}/tcp оставлен открытым; проверь Xray и UFW вручную.'
+                ) from exc
+            try:
+                call_ufw('--force', 'delete', 'allow', f'{new_port}/tcp')
+            except AraucariaError as cleanup_exc:
+                raise AraucariaError(
+                    f'Старый конфиг и порт {old_port}/tcp восстановлены, '
+                    f'но новый порт {new_port}/tcp не удалось закрыть: {cleanup_exc}'
+                ) from exc
+            raise AraucariaError(
+                f'Не удалось закрыть старый порт ({exc}). '
+                'Предыдущее подключение восстановлено; выбери другой порт или проверь UFW.'
+            ) from exc
+
+    print('\n' + '=' * 58)
+    print('  СМЕНА ПОРТА ЗАВЕРШЕНА')
+    print('=' * 58)
+    print(f'  Старый порт:      {old_port}/tcp — закрыт в UFW')
+    print(f'  Новый порт:       {new_port}/tcp — открыт в UFW')
+    print('  Xray:             конфигурация обновлена, служба перезапущена')
+    print('  UUID, ключ, SNI:  без изменений')
+    print(f'  Резервная копия:  {backup}')
+    print('  Старый профиль:   порт больше не подходит — импортируй новую ссылку')
+    print('=' * 58)
+    try:
+        show_link(args)
+    except AraucariaError as exc:
+        print(f'Новый порт работает, но ссылка не выведена: {exc}', file=sys.stderr)
+        print('Используй: vless-link --ip ПУБЛИЧНЫЙ_IP', file=sys.stderr)
+    print('Если у провайдера VPS есть внешний файрвол, открой новый TCP-порт и там.')
+
+
+def show_commands(_args=None):
+    print('\n' + '=' * 58)
+    print('  ARAUCARIA | КОМАНДЫ УПРАВЛЕНИЯ')
+    print('=' * 58)
+    print('  vless-link           Показать актуальную VLESS-ссылку')
+    print('  vless-rotate         Сменить UUID, ключи и Short ID')
+    print('  vless-port           Выбрать новый порт (yes или число)')
+    print('  vless-port --random  Выбрать случайный порт без вопроса')
+    print('  vless-port 38421     Указать порт без вопроса')
+    print('  araucaria status     Проверить Xray, UFW и Fail2ban')
+    print('  araucaria commands   Показать это меню команд')
+    print('  araucaria --help     Полная справка')
+    print('=' * 58 + '\n')
+
+
 def create_parser():
     p = argparse.ArgumentParser(
         description='Araucaria VPS Manager — Xray VLESS + REALITY без панели.'
@@ -397,6 +618,11 @@ def create_parser():
     rotate_p = commands.add_parser('rotate', help='Сменить UUID, ключ REALITY и Short ID')
     rotate_p.add_argument('--ip', help='Внешний IPv4 адрес VPS')
     commands.add_parser('status', help='Статус Xray, UFW и Fail2ban')
+    port_p = commands.add_parser('port', help='Сменить порт VLESS + REALITY с UFW и откатом')
+    port_p.add_argument('port', nargs='?', type=int, help='Выбрать TCP-порт 1024–65535')
+    port_p.add_argument('--random', action='store_true', help='Случайный свободный порт 20000–60000')
+    port_p.add_argument('--ip', help='Внешний IPv4 для готовой ссылки')
+    commands.add_parser('commands', help='Показать команды управления')
     return p
 
 
@@ -408,6 +634,8 @@ def main(argv=None):
             argv = ['link', *argv]
         elif invoked == 'vless-rotate':
             argv = ['rotate', *argv]
+        elif invoked == 'vless-port':
+            argv = ['port', *argv]
     parser = create_parser()
     args = parser.parse_args(argv)
     if not args.action:
@@ -415,7 +643,8 @@ def main(argv=None):
         return 0
     try:
         {'init': init, 'rotate': rotate, 'link': show_link,
-         'status': show_status}[args.action](args)
+         'status': show_status, 'port': switch_vless_port,
+         'commands': show_commands}[args.action](args)
     except AraucariaError as exc:
         print(f'Ошибка: {exc}', file=sys.stderr)
         return 1
