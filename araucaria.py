@@ -78,6 +78,9 @@ def validate_name(value):
     """Allow readable Unicode profile names, but reject unsafe/invisible controls."""
     if not isinstance(value, str):
         raise AraucariaError('Название VLESS должно быть текстом.')
+    # Some SSH clients append a carriage return to pasted input.
+    # Ignore only trailing CR; embedded controls remain forbidden.
+    value = value.rstrip('\r')
     if any(unicodedata.category(char) in ('Cc', 'Cf', 'Cs', 'Zl', 'Zp')
            for char in value):
         raise AraucariaError('В названии VLESS нельзя использовать управляющие или невидимые символы.')
