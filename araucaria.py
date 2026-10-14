@@ -686,20 +686,21 @@ def switch_vless_port(args):
 
 
 def show_commands(_args=None):
-    print('\n' + '=' * 58)
+    bar = '=' * 60
+    print(f'\n\x1b[1;36m{bar}')
     print('  ARAUCARIA | КОМАНДЫ УПРАВЛЕНИЯ')
-    print('=' * 58)
+    print(f'{bar}\x1b[0m')
     print('  vless-link           Показать актуальную VLESS-ссылку')
     print('  vless-rotate         Сменить UUID, ключи и Short ID')
-    print('  vless-port           Выбрать новый порт (yes или число)')
+    print('  vless-port           Выбрать новый порт (рандомный или выбранный тобой)')
     print('  vless-port --random  Выбрать случайный порт без вопроса')
     print('  vless-port 38421     Указать порт без вопроса')
-    print('  vless-name           Переименовать профиль (интерактивно)')
+    print('  vless-name           Переименовать профиль (через ввод)')
     print('  vless-name "Мой VPN" Переименовать профиль сразу')
     print('  araucaria status     Проверить Xray, UFW и Fail2ban')
     print('  araucaria commands   Показать это меню команд')
     print('  araucaria --help     Полная справка')
-    print('=' * 58 + '\n')
+    print('\x1b[1;36m' + '=' * 60 + '\x1b[0m\n')
 
 
 def create_parser():
