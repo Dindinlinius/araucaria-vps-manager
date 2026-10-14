@@ -433,6 +433,32 @@ printf 'ATTEMPTS:%s\n' "$count"
         self.assertIn('ATTEMPTS:2', result.stdout)
         self.assertIn('проверь сеть', result.stderr)
 
+    def test_retry_cancel_does_not_skip_failed_step(self):
+        installer = (MODULE_PATH.parent / 'install.sh').read_text(encoding='utf-8')
+        start = installer.index('retry_command() {')
+        end = installer.index('\nhelp() {', start)
+        helper = installer[start:end].replace(
+            '''if [[ "$ASSUME_YES" == 'yes' || ! -t 0 ]]; then''',
+            '''if [[ "$ASSUME_YES" == 'yes' ]]; then''')
+        prefix = r"""
+set -Eeuo pipefail
+ASSUME_YES=no
+warn() { printf 'WARN:%s\n' "$*" >&2; }
+recovery_hint() { printf 'HINT\n' >&2; }
+die() { printf 'ERROR:%s\n' "$*" >&2; exit 1; }
+"""
+        suffix = r"""
+always_fail() { return 37; }
+retry_command 'ufw' 'исправь UFW' always_fail
+echo 'DANGEROUS_CONTINUATION'
+"""
+        result = subprocess.run(
+            ['bash', '-c', prefix + helper + suffix], input='q\n',
+            capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('остановлена пользователем', result.stderr)
+        self.assertNotIn('DANGEROUS_CONTINUATION', result.stdout)
+
     def test_blue_banners_and_command_labels(self):
         source = (MODULE_PATH.parent / 'install.sh').read_text(encoding='utf-8')
         self.assertIn("banner 'ЧТО СДЕЛАНО ПРИ УСТАНОВКЕ'", source)
