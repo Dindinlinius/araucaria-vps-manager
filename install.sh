@@ -279,30 +279,40 @@ fi
 STEP='обновление пакетов'
 say 'Обновляем пакеты и ставим необходимые инструменты...'
 export DEBIAN_FRONTEND=noninteractive
-apt-get update
+retry_command 'обновление индексов пакетов' 'нет интернета, ошибка DNS, репозитория или занят apt' apt-get update
 if [[ "$DO_UPGRADE" == 'yes' ]]; then
-  apt-get -y upgrade
+  retry_command 'обновление Ubuntu' 'проблема репозитория, dpkg или недостаточно места' apt-get -y upgrade
 fi
-apt-get install -y ca-certificates curl unzip python3 openssl iproute2 ufw fail2ban python3-systemd unattended-upgrades
+retry_command 'установка зависимостей' 'нет связи с репозиторием либо проблемы dpkg/диска' apt-get install -y ca-certificates curl unzip python3 openssl iproute2 ufw fail2ban python3-systemd unattended-upgrades
 
 STEP='проверка порта и TLS'
 [[ -z "$(ss -H -ltn "sport = :$XRAY_PORT")" ]] || die "Порт $XRAY_PORT уже занят. Повтори с --port ДРУГОЙ_ПОРТ."
+check_reality_tls() {
+  local tls_output
+  tls_output="$(timeout 12 openssl s_client -connect "$TARGET:443" -servername "$TARGET" -tls1_3 -alpn h2 -brief </dev/null 2>&1)" || {
+    printf '%s\n' "$tls_output" >&2
+    return 1
+  }
+  if [[ "$tls_output" != *'TLSv1.3'* || "$tls_output" != *'Verification: OK'* ]]; then
+    printf '%s\n' "$tls_output" >&2
+    return 1
+  fi
+}
 say "Проверяем, что $TARGET доступен с VPS по TLS 1.3..."
-TLS_OUTPUT="$(timeout 12 openssl s_client -connect "$TARGET:443" -servername "$TARGET" -tls1_3 -alpn h2 -brief </dev/null 2>&1)" || die "TLS-проверка $TARGET не прошла. Выбери другой --target."
-[[ "$TLS_OUTPUT" == *'TLSv1.3'* && "$TLS_OUTPUT" == *'Verification: OK'* ]] || die 'Не удалось подтвердить TLS 1.3 и корректность сертификата REALITY-цели.'
+retry_command "проверка TLS 1.3 и сертификата $TARGET" 'нет DNS/интернета, TLS 1.3 или проверка сертификата не прошла' check_reality_tls
 
 STEP='настройка файрвола'
 say 'Разрешаем SSH и порт VLESS в UFW...'
 for ssh_port in "${SSH_PORTS[@]}"; do
-  ufw allow "${ssh_port}/tcp" comment 'SSH - keep access'
+  retry_command "разрешение SSH ${ssh_port}/tcp" 'UFW не смог добавить SSH-правило' ufw allow "${ssh_port}/tcp" comment 'SSH - keep access'
 done
-ufw allow "${XRAY_PORT}/tcp" comment 'Araucaria REALITY'
+retry_command "разрешение VLESS ${XRAY_PORT}/tcp" 'UFW не смог добавить порт Xray' ufw allow "${XRAY_PORT}/tcp" comment 'Araucaria REALITY'
 if ufw status | grep -q '^Status: active'; then
   warn 'UFW уже был включён: прежние правила и политика по умолчанию сохраняются. Проверь вручную другие открытые порты.'
 else
-  ufw default deny incoming
-  ufw default allow outgoing
-  ufw --force enable
+  retry_command 'политика входящих UFW' 'ошибка настройки файрвола' ufw default deny incoming
+  retry_command 'политика исходящих UFW' 'ошибка настройки файрвола' ufw default allow outgoing
+  retry_command 'включение UFW' 'ошибка UFW; SSH-правило должно существовать' ufw --force enable
 fi
 ufw status
 
@@ -326,26 +336,23 @@ findtime = $FINDTIME
 bantime = $BANTIME
 EOF
 chmod 644 /etc/fail2ban/jail.d/araucaria-sshd.local
-fail2ban-client -t
-# Ubuntu's systemd unit may report "started" before Fail2ban creates its socket.
-# Avoid starting and immediately stopping the daemon: restart once and wait.
-systemctl enable fail2ban
-systemctl restart fail2ban
-say 'Ждём готовности Fail2ban (до 30 секунд)...'
-F2B_READY='no'
-for (( attempt=1; attempt<=30; attempt++ )); do
-  if fail2ban-client ping >/dev/null 2>&1 && fail2ban-client status sshd >/dev/null 2>&1; then
-    F2B_READY='yes'
-    break
-  fi
-  sleep 1
-done
-if [[ "$F2B_READY" != 'yes' ]]; then
-  warn 'Fail2ban не ответил за 30 секунд. Диагностика:'
+retry_command 'проверка конфигурации Fail2ban' 'синтаксическая ошибка в /etc/fail2ban/jail.d/araucaria-sshd.local' fail2ban-client -t
+retry_command 'включение Fail2ban при старте' 'ошибка systemd' systemctl enable fail2ban
+retry_command 'перезапуск Fail2ban' 'ошибка systemd или конфигурации службы' systemctl restart fail2ban
+wait_fail2ban_ready() {
+  local attempt
+  say 'Ждём готовности Fail2ban (до 30 секунд)...'
+  for (( attempt=1; attempt<=30; attempt++ )); do
+    if fail2ban-client ping >/dev/null 2>&1 && fail2ban-client status sshd >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
   systemctl status fail2ban --no-pager -l || true
   journalctl -u fail2ban -n 30 --no-pager || true
-  die 'Fail2ban не готов. Посмотри журнал выше.'
-fi
+  return 1
+}
+retry_command 'ожидание готовности Fail2ban' 'служба ещё стартует либо в её журнале есть ошибка' wait_fail2ban_ready
 fail2ban-client status sshd
 
 STEP='установка Xray'
@@ -353,12 +360,13 @@ say 'Скачиваем официальный установщик XTLS/Xray-in
 INSTALLER="$(mktemp /tmp/araucaria-xray-install-XXXXXXXX.sh)"
 cleanup() { rm -f -- "${INSTALLER:-}"; }
 trap cleanup EXIT
-curl --fail --location --silent --show-error --retry 3 --connect-timeout 15 --max-time 120 \
+retry_command 'скачивание официального установщика Xray' 'проверь доступ к raw.githubusercontent.com, DNS и сертификаты' \
+  curl --fail --location --silent --show-error --retry 3 --connect-timeout 15 --max-time 120 \
   https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh \
   --output "$INSTALLER"
 [[ -s "$INSTALLER" ]] || die 'Не удалось скачать установщик Xray.'
-bash "$INSTALLER" install
-command -v xray >/dev/null || die 'Xray не установлен.'
+retry_command 'установка Xray-core' 'проверь логи выше, связь с GitHub и df -h; повтор безопасен только после проверки состояния' bash "$INSTALLER" install
+command -v xray >/dev/null || die 'Xray отсутствует после работы установщика.'
 
 STEP='отдельный пользователь Xray'
 say 'Создаём пользователя службы (НЕ меняем SSH-пользователя)...'
@@ -378,7 +386,7 @@ ProtectHome=true
 ProtectSystem=full
 UMask=0077
 EOF
-systemctl daemon-reload
+retry_command 'перечитывание службы Xray systemd' 'возможна ошибка файла systemd; проверь systemctl cat xray' systemctl daemon-reload
 
 STEP='установка Araucaria'
 say 'Ставим araucaria, vless-link, vless-rotate, vless-port и vless-name...'
