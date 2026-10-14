@@ -392,5 +392,67 @@ class PortChangeTests(unittest.TestCase):
 
 
 
+
+class InstallerNamePromptTests(unittest.TestCase):
+    """Run the actual installer name-prompt section without changing the VPS."""
+
+    @staticmethod
+    def simulate_name_input(user_input, *, overridden=False, proposed='USAraucaria'):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / 'install.sh').read_text()
+        beginning = source.index('# One validator for both command-line and interactive input.')
+        ending = source.index('# Check TCP listeners', beginning)
+        section = source[beginning:ending]
+        # Bypass only the TTY guard: supply test inputs via a controlled pipe.
+        guard = '''  [[ -t 0 ]] || die 'Неинтерактивный терминал: укажи --name "Название" --yes.' '''
+        guard = guard.rstrip()
+        assert guard in section, 'Installer TTY guard changed; update integration test.'
+        section = section.replace(guard, '  : # simulated interactive input')
+        prefix = '''
+set -Eeuo pipefail
+warn() { printf 'WARN: %s\n' "$*" >&2; }
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+'''
+        env = dict(os.environ)
+        env.update({
+            'SCRIPT_DIR': str(root),
+            'ASSUME_YES': 'no' if not overridden else 'yes',
+            'PROFILE_NAME_OVERRIDDEN': 'no' if not overridden else 'yes',
+            'PROFILE_NAME': proposed,
+        })
+        return subprocess.run(
+            ['bash', '-c', prefix + section + 'printf "FINAL:%s\n" "$PROFILE_NAME"\n'],
+            input=user_input, text=True, capture_output=True,
+            timeout=10, env=env,
+        )
+
+    def test_invalid_name_reprompts_then_accepts_normal_name(self):
+        result = self.simulate_name_input('Bad\x1bname\nTarabar\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Попробуй ещё раз', result.stderr)
+        self.assertIn('FINAL:Tarabar', result.stdout)
+
+    def test_trailing_carriage_return_is_accepted(self):
+        result = self.simulate_name_input('Tarabar\r\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('FINAL:Tarabar', result.stdout)
+
+    def test_empty_name_uses_default(self):
+        result = self.simulate_name_input('\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('FINAL:USAraucaria', result.stdout)
+
+    def test_eof_after_invalid_name_exits_instead_of_looping_forever(self):
+        result = self.simulate_name_input('Bad\x1bname\n')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Ввод названия отменён', result.stderr)
+
+    def test_bad_cli_name_still_fails_fast(self):
+        result = self.simulate_name_input('', overridden=True, proposed='Bad\x1bname')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Неправильное имя профиля', result.stderr)
+
+
+
 if __name__ == '__main__':
     unittest.main()
