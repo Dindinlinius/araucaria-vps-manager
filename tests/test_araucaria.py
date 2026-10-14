@@ -167,5 +167,129 @@ class ManagerFilesystemTests(unittest.TestCase):
         self.assertEqual(len(list(self.backups.glob('*.json'))), 1)
 
 
+class PortChangeTests(unittest.TestCase):
+    """Safety checks for open-new -> switch-Xray -> close-old operations."""
+
+    def setUp(self):
+        ManagerFilesystemTests.setUp(self)
+        with mock.patch.object(a, 'get_x25519_pair', return_value='PRIVATE'):
+            cfg = a.make_config(56399, 'www.google.com')
+        self.config.write_text(json.dumps(cfg) + '\n')
+        self.settings.parent.mkdir(parents=True, exist_ok=True)
+        self.settings.write_text('{"name":"USAraucaria"}\n')
+        self.allowed = {56399}
+        self.calls = []
+        self.fail_delete_old = False
+        self.fail_allow_new = False
+
+    def fake_run(self, *argv, **kwargs):
+        self.calls.append(argv)
+        if argv[:3] == ('ss', '-H', '-ltn'):
+            return subprocess.CompletedProcess(argv, 0, 'LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\nLISTEN 0 128 *:2022 *:*\nLISTEN 0 128 *:56399 *:*\n')
+        if argv[:2] == ('ufw', 'status'):
+            lines = ['Status: active', '', 'To Action From', '-- ------ ----',
+                     '22/tcp ALLOW Anywhere # SSH - keep access']
+            for p in sorted(self.allowed):
+                lines += [f'{p}/tcp ALLOW Anywhere # Araucaria REALITY',
+                          f'{p}/tcp (v6) ALLOW Anywhere (v6) # Araucaria REALITY']
+            return subprocess.CompletedProcess(argv, 0, '\n'.join(lines))
+        if argv[:2] == ('ufw', 'allow'):
+            if self.fail_allow_new:
+                raise subprocess.CalledProcessError(1, argv)
+            self.allowed.add(int(argv[2].split('/')[0]))
+        if argv[:4] == ('ufw', '--force', 'delete', 'allow'):
+            port = int(argv[4].split('/')[0])
+            if self.fail_delete_old and port == 56399:
+                raise subprocess.CalledProcessError(1, argv)
+            self.allowed.discard(port)
+        return subprocess.CompletedProcess(argv, 0, '')
+
+    def call_change(self, port=38421, random=False, with_input=None):
+        args = SimpleNamespace(port=port, random=random, ip='203.0.113.42')
+        with (mock.patch.object(a, 'require_root'),
+              mock.patch.object(a, 'run', side_effect=self.fake_run),
+              mock.patch.object(a, 'port_bindable', return_value=True),
+              mock.patch.object(a, 'get_public_key', return_value='PUB'),
+              contextlib.redirect_stdout(io.StringIO()) as out):
+            if with_input is not None:
+                with (mock.patch.object(a.sys, 'stdin', new=SimpleNamespace(isatty=lambda: True)),
+                      mock.patch('builtins.input', return_value=with_input)):
+                    a.switch_vless_port(args)
+            else:
+                a.switch_vless_port(args)
+        return out.getvalue()
+
+    def test_port_change_updates_config_firewall_and_url_without_rotating_keys(self):
+        before = json.loads(self.config.read_text())
+        printed = self.call_change()
+        after = json.loads(self.config.read_text())
+        self.assertEqual(a.find_inbound(after)['port'], 38421)
+        self.assertEqual(a.find_inbound(before)['settings'], a.find_inbound(after)['settings'])
+        self.assertEqual(a.find_inbound(before)['streamSettings'], a.find_inbound(after)['streamSettings'])
+        self.assertEqual(self.allowed, {38421})
+        self.assertIn('38421', printed)
+        self.assertIn('56399/tcp — закрыт', printed)
+        self.assertIn(':38421?', printed)
+        self.assertEqual(len(list(self.backups.glob('*.json'))), 1)
+        # The old port MUST be closed only AFTER the new Xray configuration was applied.
+        self.assertIn(('ufw', '--force', 'delete', 'allow', '56399/tcp'), self.calls)
+
+    def test_port_change_rejects_busy_port_without_firewall_mutations(self):
+        with self.assertRaisesRegex(a.AraucariaError, 'занят'):
+            self.call_change(port=2022)
+        self.assertEqual(self.allowed, {56399})
+        self.assertEqual(a.find_inbound(json.loads(self.config.read_text()))['port'], 56399)
+        self.assertFalse(any(c[:2] == ('ufw', 'allow') for c in self.calls))
+
+    def test_port_change_rejects_current_port(self):
+        with self.assertRaisesRegex(a.AraucariaError, 'текущий'):
+            self.call_change(port=56399)
+        self.assertEqual(self.allowed, {56399})
+
+    def test_port_change_rolls_back_firewall_if_xray_rejected_new_config(self):
+        with mock.patch.object(a, 'apply_config', side_effect=a.AraucariaError('Xray error')):
+            with self.assertRaisesRegex(a.AraucariaError, 'новый порт закрыт'):
+                self.call_change()
+        self.assertEqual(self.allowed, {56399})
+        self.assertEqual(a.find_inbound(json.loads(self.config.read_text()))['port'], 56399)
+
+    def test_port_change_rolls_back_xray_if_old_port_cannot_close(self):
+        self.fail_delete_old = True
+        with self.assertRaisesRegex(a.AraucariaError, 'Предыдущее подключение восстановлено'):
+            self.call_change()
+        self.assertEqual(self.allowed, {56399})
+        self.assertEqual(a.find_inbound(json.loads(self.config.read_text()))['port'], 56399)
+        self.assertEqual(len(list(self.backups.glob('*.json'))), 2)
+
+    def test_port_change_rejects_ufw_allow_failure(self):
+        self.fail_allow_new = True
+        with self.assertRaisesRegex(a.AraucariaError, 'Команда UFW'):
+            self.call_change()
+        self.assertEqual(self.allowed, {56399})
+
+    def test_interactive_yes_selects_random_port_and_prints_busy_ports(self):
+        with mock.patch.object(a.secrets, 'randbelow', return_value=13333):
+            output = self.call_change(port=None, with_input='yes')
+        self.assertEqual(self.allowed, {33333})
+        self.assertIn('22, 2022, 56399', output)
+        self.assertIn('Допустимый диапазон', output)
+
+    def test_ufw_status_requires_managed_old_port(self):
+        self.allowed.clear()
+        with self.assertRaisesRegex(a.AraucariaError, 'Нет правила UFW Araucaria'):
+            self.call_change()
+        self.assertEqual(self.allowed, set())
+
+    def test_port_command_cli_registered(self):
+        p = a.create_parser()
+        ns = p.parse_args(['port', '43434'])
+        self.assertEqual(ns.action, 'port')
+        self.assertEqual(ns.port, 43434)
+        self.assertFalse(ns.random)
+        ns = p.parse_args(['port', '--random'])
+        self.assertTrue(ns.random)
+
+
+
 if __name__ == '__main__':
     unittest.main()
