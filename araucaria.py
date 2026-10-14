@@ -468,6 +468,28 @@ def listening_tcp_ports():
     return ports
 
 
+def ssh_reserved_ports():
+    """Protect SSH ports even if sshd has been configured but is not LISTENing."""
+    found = set()
+    ssh_connection = os.environ.get('SSH_CONNECTION', '').split()
+    if len(ssh_connection) >= 4 and ssh_connection[3].isdecimal():
+        candidate = int(ssh_connection[3])
+        if 1 <= candidate <= 65535:
+            found.add(candidate)
+    binary = shutil.which('sshd') or ('/usr/sbin/sshd' if Path('/usr/sbin/sshd').exists() else None)
+    if binary:
+        try:
+            data = run(binary, '-T', capture=True, check=False)
+            if data.returncode == 0:
+                for m in re.finditer(r'^port\s+(\d+)\s*$', data.stdout or '', re.M):
+                    candidate = int(m.group(1))
+                    if 1 <= candidate <= 65535:
+                        found.add(candidate)
+        except OSError:
+            pass
+    return found
+
+
 def port_bindable(port):
     """An additional check, since a new TCP listener may appear after `ss`."""
     try:
@@ -476,6 +498,15 @@ def port_bindable(port):
         return True
     except OSError:
         return False
+
+
+def random_available_port(unavailable, attempts=3000):
+    """Choose from the entire allowed range, skipping busy or reserved TCP ports."""
+    for _ in range(attempts):
+        candidate = MIN_USER_PORT + secrets.randbelow(MAX_USER_PORT - MIN_USER_PORT + 1)
+        if candidate not in unavailable and port_bindable(candidate):
+            return candidate
+    raise AraucariaError('Не удалось подобрать свободный TCP-порт в диапазоне 1024–65535.')
 
 
 def ufw_status():
@@ -517,7 +548,7 @@ def choose_vless_port(args, old_port, unavailable):
     print('=' * 58)
     print(f'Текущий порт:      {old_port}/tcp')
     print('Допустимый диапазон: 1024–65535')
-    print('Случайный порт:      20000–60000')
+    print('Случайный порт:      1024–65535 (кроме занятых и зарезервированных)')
     occupied = sorted(listening_tcp_ports())
     shown = ', '.join(map(str, occupied[:35])) or 'нет'
     suffix = f' ... и ещё {len(occupied) - 35}' if len(occupied) > 35 else ''
@@ -537,11 +568,7 @@ def choose_vless_port(args, old_port, unavailable):
             raise AraucariaError('Ввод отменён.')
 
     if selection == 'yes':
-        for _ in range(2000):
-            candidate = 20000 + secrets.randbelow(40001)
-            if candidate not in unavailable and port_bindable(candidate):
-                return candidate
-        raise AraucariaError('Не удалось подобрать свободный TCP-порт.')
+        return random_available_port(unavailable)
 
     if not re.fullmatch(r'[0-9]{1,5}', selection):
         raise AraucariaError('Введи yes либо число от 1024 до 65535.')
@@ -574,7 +601,7 @@ def switch_vless_port(args):
             )
 
         occupied = listening_tcp_ports()
-        forbidden = occupied | ufw_ports_in_rules(status) | {old_port}
+        forbidden = occupied | ufw_ports_in_rules(status) | ssh_reserved_ports() | {old_port}
         new_port = choose_vless_port(args, old_port, forbidden)
 
         # No live changes have occurred up to here.
@@ -688,7 +715,7 @@ def create_parser():
     commands.add_parser('status', help='Статус Xray, UFW и Fail2ban')
     port_p = commands.add_parser('port', help='Сменить порт VLESS + REALITY с UFW и откатом')
     port_p.add_argument('port', nargs='?', type=int, help='Выбрать TCP-порт 1024–65535')
-    port_p.add_argument('--random', action='store_true', help='Случайный свободный порт 20000–60000')
+    port_p.add_argument('--random', action='store_true', help='Случайный свободный порт 1024–65535')
     port_p.add_argument('--ip', help='Внешний IPv4 для готовой ссылки')
     name_p = commands.add_parser('name', help='Переименовать VLESS-ссылку без перезапуска Xray')
     name_p.add_argument('name', nargs='?', help='Новое имя (до 64 символов, в кавычках если есть пробелы)')
