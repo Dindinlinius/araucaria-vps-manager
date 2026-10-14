@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / 'araucaria.py'
 spec = importlib.util.spec_from_file_location('araucaria', MODULE_PATH)
@@ -21,6 +21,21 @@ spec.loader.exec_module(a)
 
 
 class ConfigTests(unittest.TestCase):
+    def test_unicode_profile_name_and_safe_url_fragment(self):
+        self.assertEqual(a.validate_name('  Мой VPN 🇺🇸  '), 'Мой VPN 🇺🇸')
+        with mock.patch.object(a, 'get_x25519_pair', return_value='PRIVATE'):
+            cfg = a.make_config(56399, 'www.google.com')
+        with mock.patch.object(a, 'get_public_key', return_value='PUBLIC'):
+            link = a.make_link(cfg, '203.0.113.42', 'Мой VPN 🇺🇸 #1')
+        self.assertEqual(unquote(urlsplit(link).fragment), 'Мой VPN 🇺🇸 #1')
+        self.assertIn('%23', link)
+
+    def test_bad_profile_names_are_rejected(self):
+        for name in ['', '    ', 'a' * 65, '🌲' * 60, 'foo\nbar',
+                     '\x1b[31m', 'hidden\u200btext', 'odd\u202e_name']:
+            with self.subTest(name=name), self.assertRaises(a.AraucariaError):
+                a.validate_name(name)
+
     def test_make_config_matches_current_reality_layout(self):
         with mock.patch.object(a, 'get_x25519_pair', return_value='PRIVATE'):
             cfg = a.make_config(56399, 'www.google.com')
