@@ -137,6 +137,58 @@ class ManagerFilesystemTests(unittest.TestCase):
             a.init(SimpleNamespace(port=56399, target='www.google.com', name='USAraucaria'))
         self.assertFalse(self.settings.exists())
 
+    def test_init_rejects_unsafe_name_before_changes(self):
+        with self.assertRaises(a.AraucariaError):
+            a.init(SimpleNamespace(port=56399, target='www.google.com', name='bad\nname'))
+        self.assertEqual(json.loads(self.config.read_text()), {})
+        self.assertFalse(self.settings.exists())
+
+    def test_rename_preserves_config_and_other_settings(self):
+        with mock.patch.object(a, 'get_x25519_pair', return_value='PRIVATE'):
+            cfg = a.make_config(56399, 'www.google.com')
+        self.config.write_text(json.dumps(cfg))
+        self.settings.parent.mkdir(parents=True, exist_ok=True)
+        metadata = {'name': 'USAraucaria', 'created_utc': '2026-10-14T00:00:00Z'}
+        self.settings.write_text(json.dumps(metadata))
+        with (mock.patch.object(a, 'require_root'),
+              mock.patch.object(a, 'get_public_key', return_value='PUBLIC'),
+              contextlib.redirect_stdout(io.StringIO()) as out):
+            a.rename_vless(SimpleNamespace(name='Тестовый VPS 🌲', ip='203.0.113.42'))
+        result = json.loads(self.settings.read_text())
+        self.assertEqual(result['name'], 'Тестовый VPS 🌲')
+        self.assertEqual(result['created_utc'], metadata['created_utc'])
+        self.assertEqual(json.loads(self.config.read_text()), cfg)
+        self.assertFalse(list(self.backups.glob('*.json')))
+        self.assertIn('#%D0%A2%D0%B5%D1%81%D1%82', out.getvalue())
+        self.assertIn('перезапуск не нужен', out.getvalue())
+
+    def test_rename_interactive_prompts_and_rejects_invalid_without_mutation(self):
+        with mock.patch.object(a, 'get_x25519_pair', return_value='PRIVATE'):
+            cfg = a.make_config(56399, 'www.google.com')
+        self.config.write_text(json.dumps(cfg))
+        self.settings.parent.mkdir(parents=True, exist_ok=True)
+        self.settings.write_text('{"name":"USAraucaria"}')
+        with (mock.patch.object(a, 'require_root'),
+              mock.patch.object(a.sys, 'stdin', new=SimpleNamespace(isatty=lambda: True)),
+              mock.patch('builtins.input', return_value='wrong\x1bname'),
+              contextlib.redirect_stdout(io.StringIO())):
+            with self.assertRaises(a.AraucariaError):
+                a.rename_vless(SimpleNamespace(name=None, ip='203.0.113.42'))
+        self.assertEqual(json.loads(self.settings.read_text())['name'], 'USAraucaria')
+
+    def test_rename_does_not_restart_service(self):
+        with mock.patch.object(a, 'get_x25519_pair', return_value='PRIVATE'):
+            cfg = a.make_config(56399, 'www.google.com')
+        self.config.write_text(json.dumps(cfg))
+        self.settings.parent.mkdir(parents=True, exist_ok=True)
+        self.settings.write_text('{"name":"USAraucaria"}')
+        with (mock.patch.object(a, 'require_root'),
+              mock.patch.object(a, 'get_public_key', return_value='PUB'),
+              mock.patch.object(a, 'run') as calls,
+              contextlib.redirect_stdout(io.StringIO())):
+            a.rename_vless(SimpleNamespace(name='My-VPS', ip='203.0.113.42'))
+        calls.assert_not_called()
+
     def test_rotation_updates_credentials_but_keeps_server_settings(self):
         with mock.patch.object(a, 'get_x25519_pair', return_value='OLD_PRIV'):
             cfg = a.make_config(56399, 'www.google.com')
