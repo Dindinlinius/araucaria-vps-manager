@@ -167,8 +167,26 @@ findtime = $FINDTIME
 bantime = $BANTIME
 EOF
 chmod 644 /etc/fail2ban/jail.d/araucaria-sshd.local
-systemctl enable --now fail2ban
+fail2ban-client -t
+# Ubuntu's systemd unit may report "started" before Fail2ban creates its socket.
+# Avoid starting and immediately stopping the daemon: restart once and wait.
+systemctl enable fail2ban
 systemctl restart fail2ban
+say 'Ждём готовности Fail2ban (до 30 секунд)...'
+F2B_READY='no'
+for (( attempt=1; attempt<=30; attempt++ )); do
+  if fail2ban-client ping >/dev/null 2>&1 && fail2ban-client status sshd >/dev/null 2>&1; then
+    F2B_READY='yes'
+    break
+  fi
+  sleep 1
+done
+if [[ "$F2B_READY" != 'yes' ]]; then
+  warn 'Fail2ban не ответил за 30 секунд. Диагностика:'
+  systemctl status fail2ban --no-pager -l || true
+  journalctl -u fail2ban -n 30 --no-pager || true
+  die 'Fail2ban не готов. Посмотри журнал выше.'
+fi
 fail2ban-client status sshd
 
 STEP='установка Xray'
