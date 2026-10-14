@@ -223,7 +223,8 @@ fi
 
 # Check TCP listeners, currently configured SSH ports, UFW rules, and socket binding.
 # For the default mode, use every port from 1024 to 65535, except unavailable ones.
-XRAY_PORT="$(python3 - "$SCRIPT_DIR" "$XRAY_PORT" "${SSH_PORTS[@]}" <<'PY'
+while true; do
+  if selected_port="$(python3 - "$SCRIPT_DIR" "$XRAY_PORT" "${SSH_PORTS[@]}" <<'PY'
 import shutil
 import sys
 sys.path.insert(0, sys.argv[1])
@@ -248,7 +249,21 @@ except AraucariaError as exc:
     print(f'Ошибка выбора порта: {exc}', file=sys.stderr)
     sys.exit(1)
 PY
-)" || die 'Не удалось выбрать безопасный свободный порт VLESS.'
+)"; then
+    XRAY_PORT="$selected_port"
+    break
+  fi
+  if [[ "$ASSUME_YES" == 'yes' || ! -t 0 ]]; then
+    die 'Не удалось выбрать TCP-порт. Проверь ss -ltnp и ufw status или передай --port НОМЕР.'
+  fi
+  warn 'Порт занят, недопустим или недоступен. Можно выбрать другой, не перезапуская установщик.'
+  if ! IFS= read -r -p 'TCP-порт 1024–65535; Enter — случайный; q — отмена: ' XRAY_PORT; then
+    die 'Ввод порта прерван.'
+  fi
+  case "$XRAY_PORT" in
+    q|quit) die 'Выбор порта отменён.' ;;
+  esac
+done
 
 say 'План установки:'
 printf '  Ubuntu:      %s\n  SSH-порты:   %s\n  VLESS порт:  %s/tcp\n  REALITY SNI: %s\n  Имя профиля: %s\n  Fail2ban:    %s\n' \
@@ -256,8 +271,16 @@ printf '  Ubuntu:      %s\n  SSH-порты:   %s\n  VLESS порт:  %s/tcp\n  
 warn 'Вход под root и пароль SSH не меняются. Держи текущее SSH-подключение открытым до повторной проверки!'
 if [[ "$ASSUME_YES" == 'no' ]]; then
   [[ -t 0 ]] || die 'Нет интерактивного терминала. Для явного согласия используй --yes.'
-  read -r -p 'Продолжить установку? Напиши yes: ' answer
-  [[ "$answer" == 'yes' ]] || die 'Установка отменена.'
+  while true; do
+    if ! IFS= read -r -p 'Продолжить установку? Напиши yes: ' answer; then
+      die 'Ввод подтверждения прерван; установка ещё не началась.'
+    fi
+    case "$answer" in
+      yes) break ;;
+      no|q|quit) die 'Установка отменена пользователем.' ;;
+      *) warn 'Для продолжения введи yes. Для отмены введи no или q.' ;;
+    esac
+  done
 fi
 
 STEP='жёлтое приглашение терминала'
