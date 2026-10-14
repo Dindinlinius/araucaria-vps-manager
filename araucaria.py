@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +34,8 @@ LOCK_FILE = Path('/run/lock/araucaria.lock')
 INBOUND_TAG = 'vless-reality'
 SERVICE_USER = 'araucaria-xray'
 DEFAULT_NAME = 'USAraucaria'
+MIN_USER_PORT = 1024
+MAX_USER_PORT = 65535
 
 
 class AraucariaError(Exception):
@@ -62,9 +65,26 @@ def read_json(path):
 
 
 def validate_port(port):
-    if not (1024 <= int(port) <= 65535):
+    try:
+        candidate = int(port)
+    except (TypeError, ValueError):
+        raise AraucariaError('Порт должен быть целым числом от 1024 до 65535.')
+    if not (MIN_USER_PORT <= candidate <= MAX_USER_PORT):
         raise AraucariaError('Порт должен быть от 1024 до 65535.')
-    return int(port)
+    return candidate
+
+
+def validate_name(value):
+    """Allow readable Unicode profile names, but reject unsafe/invisible controls."""
+    if not isinstance(value, str):
+        raise AraucariaError('Название VLESS должно быть текстом.')
+    if any(unicodedata.category(char) in ('Cc', 'Cf', 'Cs', 'Zl', 'Zp')
+           for char in value):
+        raise AraucariaError('В названии VLESS нельзя использовать управляющие или невидимые символы.')
+    name = unicodedata.normalize('NFC', value).strip()
+    if not name or len(name) > 64 or len(name.encode('utf-8')) > 192:
+        raise AraucariaError('Название VLESS: от 1 до 64 символов (до 192 байт UTF-8).')
+    return name
 
 
 def validate_target(target):
@@ -272,6 +292,7 @@ def apply_config(config):
 def init(args):
     require_root()
     target = validate_target(args.target)
+    profile_name = validate_name(args.name)
     with exclusive_lock():
         previous = read_json(CONFIG_FILE)
         if previous.get('inbounds'):
@@ -280,10 +301,10 @@ def init(args):
             raise AraucariaError('Настройки Araucaria уже есть. Повторная установка отменена.')
         config = make_config(args.port, target)
         backup = apply_config(config)
-        settings = {'name': args.name, 'created_utc': datetime.now(timezone.utc).isoformat()}
+        settings = {'name': profile_name, 'created_utc': datetime.now(timezone.utc).isoformat()}
         save_json_private(SETTINGS_FILE, settings)
     print('VLESS + REALITY установлен и работает.')
-    print(f'Порт: {args.port}; SNI: {target}; имя: {args.name}')
+    print(f'Порт: {args.port}; SNI: {target}; имя: {profile_name}')
     print(f'Резервная копия: {backup}')
 
 
@@ -347,7 +368,7 @@ def make_link(config, ip, name=DEFAULT_NAME):
         params['flow'] = client['flow']
     return (
         f"vless://{client['id']}@{ip}:{inbound['port']}?"
-        f"{urlencode(params)}#{quote(name, safe='')}"
+        f"{urlencode(params)}#{quote(validate_name(name), safe='')}"
     )
 
 
@@ -357,12 +378,13 @@ def show_link(args):
     ip = public_ipv4(args.ip)
     inbound = find_inbound(config)
     client, reality = validate_inbound(inbound)
-    link = make_link(config, ip, settings.get('name', DEFAULT_NAME))
+    profile_name = validate_name(settings.get('name', DEFAULT_NAME))
+    link = make_link(config, ip, profile_name)
     print('\n===== ARAUCARIA: VLESS + REALITY =====')
     print(f'IP:   {ip}')
     print(f"Порт: {inbound['port']}")
     print(f"SNI:  {reality['serverNames'][0]}")
-    print(f"Имя:  {settings.get('name', DEFAULT_NAME)}")
+    print(f'Имя:  {profile_name}')
     print('\nСсылка (не публикуй её):\n')
     print(link)
     print('\n=====================================\n')
