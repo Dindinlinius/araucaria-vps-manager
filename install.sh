@@ -107,6 +107,54 @@ fi
 [[ -z "$SSH_PORT_OVERRIDE" ]] || add_ssh_port "$SSH_PORT_OVERRIDE"
 (( ${#SSH_PORTS[@]} > 0 )) || die 'SSH-порт не определён. Перезапусти с --ssh-port 22 (или своим портом).'
 
+if [[ "$ASSUME_YES" == 'no' && "$PROFILE_NAME_OVERRIDDEN" == 'no' ]]; then
+  [[ -t 0 ]] || die 'Неинтерактивный терминал: укажи --name "Название" --yes.'
+  read -r -p 'Имя VLESS-профиля [USAraucaria] (Enter = оставить): ' entered_name
+  [[ -z "$entered_name" ]] || PROFILE_NAME="$entered_name"
+fi
+
+# Use the same Unicode validation for installer and the future `vless-name` command.
+PROFILE_NAME="$(python3 - "$SCRIPT_DIR" "$PROFILE_NAME" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from araucaria import AraucariaError, validate_name
+try:
+    print(validate_name(sys.argv[2]))
+except AraucariaError as exc:
+    print(f'Неправильное имя профиля: {exc}', file=sys.stderr)
+    sys.exit(1)
+PY
+)" || die 'Имя VLESS-профиля не прошло проверку.'
+
+# Check TCP listeners, currently configured SSH ports, UFW rules, and socket binding.
+# For the default mode, use every port from 1024 to 65535, except unavailable ones.
+XRAY_PORT="$(python3 - "$SCRIPT_DIR" "$XRAY_PORT" "${SSH_PORTS[@]}" <<'PY'
+import shutil
+import sys
+sys.path.insert(0, sys.argv[1])
+from araucaria import (
+    AraucariaError, listening_tcp_ports, port_bindable,
+    random_available_port, ufw_ports_in_rules, ufw_status, validate_port,
+)
+try:
+    requested = sys.argv[2]
+    unavailable = {int(p) for p in sys.argv[3:]}
+    unavailable.update(listening_tcp_ports())
+    if shutil.which('ufw'):
+        unavailable.update(ufw_ports_in_rules(ufw_status()))
+    if requested:
+        chosen = validate_port(requested)
+        if chosen in unavailable or not port_bindable(chosen):
+            raise AraucariaError(f'Выбранный порт {chosen}/tcp занят или зарезервирован для SSH/UFW.')
+    else:
+        chosen = random_available_port(unavailable)
+    print(chosen)
+except AraucariaError as exc:
+    print(f'Ошибка выбора порта: {exc}', file=sys.stderr)
+    sys.exit(1)
+PY
+)" || die 'Не удалось выбрать безопасный свободный порт VLESS.'
+
 say 'План установки:'
 printf '  Ubuntu:      %s\n  SSH-порты:   %s\n  VLESS порт:  %s/tcp\n  REALITY SNI: %s\n  Имя профиля: %s\n  Fail2ban:    %s\n' \
   "$VERSION_ID" "${SSH_PORTS[*]}" "$XRAY_PORT" "$TARGET" "$PROFILE_NAME" "$F2B_MODE"
