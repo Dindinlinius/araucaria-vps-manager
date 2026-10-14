@@ -405,6 +405,34 @@ class InstallerRecoveryUXTests(unittest.TestCase):
         self.assertIn("trap 'on_interrupted 130' INT", source)
         self.assertIn('Enter/r — повторить, q — остановиться', source)
 
+    def test_retry_recoverable_step_in_same_process(self):
+        installer = (MODULE_PATH.parent / 'install.sh').read_text(encoding='utf-8')
+        start = installer.index('retry_command() {')
+        end = installer.index('\nhelp() {', start)
+        helper = installer[start:end]
+        helper = helper.replace(
+            '''if [[ "$ASSUME_YES" == 'yes' || ! -t 0 ]]; then''',
+            '''if [[ "$ASSUME_YES" == 'yes' ]]; then''')
+        prefix = r"""
+set -Eeuo pipefail
+ASSUME_YES=no
+warn() { printf 'WARN:%s\n' "$*" >&2; }
+recovery_hint() { printf 'HINT\n' >&2; }
+die() { printf 'ERROR:%s\n' "$*" >&2; exit 1; }
+"""
+        suffix = r"""
+count=0
+flaky() { count=$((count+1)); (( count >= 2 )); }
+retry_command 'apt' 'проверь сеть' flaky
+printf 'ATTEMPTS:%s\n' "$count"
+"""
+        result = subprocess.run(
+            ['bash', '-c', prefix + helper + suffix], input='\n',
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('ATTEMPTS:2', result.stdout)
+        self.assertIn('проверь сеть', result.stderr)
+
     def test_blue_banners_and_command_labels(self):
         source = (MODULE_PATH.parent / 'install.sh').read_text(encoding='utf-8')
         self.assertIn("banner 'ЧТО СДЕЛАНО ПРИ УСТАНОВКЕ'", source)
