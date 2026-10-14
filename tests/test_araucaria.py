@@ -396,6 +396,27 @@ class PortChangeTests(unittest.TestCase):
 
 
 
+class InstallerRecoveryUXTests(unittest.TestCase):
+    def test_recovery_messages_and_retry_controls_are_present(self):
+        source = (MODULE_PATH.parent / 'install.sh').read_text(encoding='utf-8')
+        self.assertIn('retry_command() {', source)
+        self.assertIn('recovery_hint() {', source)
+        self.assertIn("trap 'on_unexpected_error", source)
+        self.assertIn("trap 'on_interrupted 130' INT", source)
+        self.assertIn('Enter/r — повторить, q — остановиться', source)
+
+    def test_blue_banners_and_command_labels(self):
+        source = (MODULE_PATH.parent / 'install.sh').read_text(encoding='utf-8')
+        self.assertIn("banner 'ЧТО СДЕЛАНО ПРИ УСТАНОВКЕ'", source)
+        self.assertIn("banner 'ГОТОВАЯ ССЫЛКА'", source)
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            a.show_commands()
+        result = output.getvalue()
+        self.assertIn('\x1b[1;36m', result)
+        self.assertIn('Выбрать новый порт (рандомный или выбранный тобой)', result)
+        self.assertIn('Переименовать профиль (через ввод)', result)
+
+
 class InstallerPresentationTests(unittest.TestCase):
     """Smoke-check installer prompts without provisioning a VPS."""
 
