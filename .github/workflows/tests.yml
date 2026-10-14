@@ -1,0 +1,29 @@
+name: Araucaria checks
+
+on:
+  push:
+    branches:
+      - main
+      - feature/vless-port-install-report-v0.2
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Ubuntu ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Validate installer Bash syntax
+        run: bash -n install.sh
+      - name: Compile Python CLI
+        run: python3 -m py_compile araucaria.py
+      - name: Run unit and name-prompt tests
+        run: python3 -m unittest discover -s tests -v
