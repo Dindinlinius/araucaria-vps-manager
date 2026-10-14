@@ -107,14 +107,9 @@ fi
 [[ -z "$SSH_PORT_OVERRIDE" ]] || add_ssh_port "$SSH_PORT_OVERRIDE"
 (( ${#SSH_PORTS[@]} > 0 )) || die 'SSH-порт не определён. Перезапусти с --ssh-port 22 (или своим портом).'
 
-if [[ "$ASSUME_YES" == 'no' && "$PROFILE_NAME_OVERRIDDEN" == 'no' ]]; then
-  [[ -t 0 ]] || die 'Неинтерактивный терминал: укажи --name "Название" --yes.'
-  read -r -p 'Имя VLESS-профиля [USAraucaria] (Enter = оставить): ' entered_name
-  [[ -z "$entered_name" ]] || PROFILE_NAME="$entered_name"
-fi
-
-# Use the same Unicode validation for installer and the future `vless-name` command.
-PROFILE_NAME="$(python3 - "$SCRIPT_DIR" "$PROFILE_NAME" <<'PY'
+# One validator for both command-line and interactive input.
+validate_profile_name() {
+  python3 - "$SCRIPT_DIR" "$1" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
 from araucaria import AraucariaError, validate_name
@@ -124,7 +119,27 @@ except AraucariaError as exc:
     print(f'Неправильное имя профиля: {exc}', file=sys.stderr)
     sys.exit(1)
 PY
-)" || die 'Имя VLESS-профиля не прошло проверку.'
+}
+
+if [[ "$ASSUME_YES" == 'no' && "$PROFILE_NAME_OVERRIDDEN" == 'no' ]]; then
+  [[ -t 0 ]] || die 'Неинтерактивный терминал: укажи --name "Название" --yes.'
+  while true; do
+    entered_name=''
+    if ! IFS= read -r -p 'Имя VLESS-профиля [USAraucaria] (Enter = оставить): ' entered_name; then
+      die 'Ввод названия отменён. Установка ещё не началась.'
+    fi
+    # A pasted Windows-style newline may leave a trailing carriage return.
+    entered_name="${entered_name%$'\r'}"
+    proposed_name="${entered_name:-USAraucaria}"
+    if valid_name="$(validate_profile_name "$proposed_name")"; then
+      PROFILE_NAME="$valid_name"
+      break
+    fi
+    warn 'Попробуй ещё раз. Например, Tarabar. Enter — оставить USAraucaria.'
+  done
+else
+  PROFILE_NAME="$(validate_profile_name "$PROFILE_NAME")" || die 'Имя VLESS-профиля не прошло проверку.'
+fi
 
 # Check TCP listeners, currently configured SSH ports, UFW rules, and socket binding.
 # For the default mode, use every port from 1024 to 65535, except unavailable ones.
