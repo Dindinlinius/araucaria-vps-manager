@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Araucaria VPS Manager v0.2 - for a NEW Ubuntu 22.04 / 24.04 VPS.
+# Araucaria VPS Manager v0.2.0-rc2 - for a NEW Ubuntu 22.04 / 24.04 VPS.
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="www.google.com"
 PROFILE_NAME="USAraucaria"
+PROFILE_NAME_OVERRIDDEN="no"
 XRAY_PORT=""
 SSH_PORT_OVERRIDE=""
 F2B_MODE="safe"
@@ -23,10 +24,10 @@ Araucaria VPS Manager — автоматическая настройка нов
 
 Использование: bash install.sh [параметры]
 
-  --port N             порт VLESS (по умолчанию случайный 20000-60000)
+  --port N             порт VLESS (по умолчанию случайный 1024-65535)
   --ssh-port N         SSH-порт дополнительно к автоматически найденным
   --target HOST        SNI/REALITY-цель (по умолчанию www.google.com)
-  --name NAME          имя профиля в ссылке (по умолчанию USAraucaria)
+  --name NAME          имя профиля в ссылке (можно русский, пробелы и emoji)
   --strict-fail2ban    2 попытки / 3 минуты / блок на 72 часа (опасно для новичка)
   --no-upgrade         не выполнять apt-get upgrade
   --yes                не задавать интерактивных вопросов
@@ -47,7 +48,7 @@ while (( $# )); do
         --port) XRAY_PORT="$2" ;;
         --ssh-port) SSH_PORT_OVERRIDE="$2" ;;
         --target) TARGET="$2" ;;
-        --name) PROFILE_NAME="$2" ;;
+        --name) PROFILE_NAME="$2"; PROFILE_NAME_OVERRIDDEN="yes" ;;
       esac
       shift 2 ;;
     --strict-fail2ban) F2B_MODE="strict"; shift ;;
@@ -69,17 +70,16 @@ case "${VERSION_ID:-}" in
 esac
 command -v systemctl >/dev/null || die 'Нужен systemd.'
 [[ -d /run/systemd/system ]] || die 'systemd не запущен. Это не обычный VPS с systemd.'
+command -v python3 >/dev/null || die 'Не найден python3. Установи: apt-get install python3.'
+command -v ss >/dev/null || die 'Не найдена утилита ss. Установи: apt-get install iproute2.'
 
-for existing in /usr/local/bin/xray /etc/systemd/system/xray.service /etc/araucaria/settings.json /usr/local/bin/araucaria /usr/local/bin/vless-link /usr/local/bin/vless-rotate /usr/local/bin/vless-port; do
+for existing in /usr/local/bin/xray /etc/systemd/system/xray.service /etc/araucaria/settings.json /usr/local/bin/araucaria /usr/local/bin/vless-link /usr/local/bin/vless-rotate /usr/local/bin/vless-port /usr/local/bin/vless-name; do
   [[ ! -e "$existing" && ! -L "$existing" ]] || die "Обнаружен $existing. Установщик предназначен для чистого VPS и ничего не перезапишет."
 done
 id araucaria-xray >/dev/null 2>&1 && die 'Пользователь araucaria-xray уже существует. Отмена во избежание конфликта.'
 
-[[ -n "$XRAY_PORT" ]] || XRAY_PORT="$(shuf -i 20000-60000 -n 1)"
-port_valid "$XRAY_PORT" || die 'Недопустимый порт VLESS. Допустимо 1024-65535.'
 [[ -z "$SSH_PORT_OVERRIDE" ]] || ssh_port_valid "$SSH_PORT_OVERRIDE" || die 'Неправильный SSH-порт.'
 [[ "$TARGET" =~ ^[a-zA-Z0-9-]+([.][a-zA-Z0-9-]+)+$ ]] || die 'Некорректный REALITY-домен.'
-[[ "$PROFILE_NAME" =~ ^[a-zA-Z0-9_-]{1,48}$ ]] || die 'Имя профиля: 1-48 латинских букв, цифр, - или _.'
 
 # Detect both configured SSH listening ports and the port used by the current SSH session.
 declare -a SSH_PORTS=()
@@ -238,11 +238,12 @@ EOF
 systemctl daemon-reload
 
 STEP='установка Araucaria'
-say 'Ставим araucaria, vless-link, vless-rotate и vless-port...'
+say 'Ставим araucaria, vless-link, vless-rotate, vless-port и vless-name...'
 install -m 0755 "$SCRIPT_DIR/araucaria.py" /usr/local/bin/araucaria
 ln -s /usr/local/bin/araucaria /usr/local/bin/vless-link
 ln -s /usr/local/bin/araucaria /usr/local/bin/vless-rotate
 ln -s /usr/local/bin/araucaria /usr/local/bin/vless-port
+ln -s /usr/local/bin/araucaria /usr/local/bin/vless-name
 
 STEP='создание и применение REALITY'
 /usr/local/bin/araucaria init --port "$XRAY_PORT" --target "$TARGET" --name "$PROFILE_NAME"
@@ -272,7 +273,7 @@ printf '  [OK] Xray-core: VLESS + REALITY, TCP, Vision\n'
 printf '  [OK] SNI: %s; профиль: %s\n' "$TARGET" "$PROFILE_NAME"
 printf '  [OK] Xray: отдельный системный пользователь araucaria-xray\n'
 printf '  [OK] Автоматические обновления безопасности Ubuntu\n'
-printf '  [OK] Генерация ссылок, смена ключей и порта, резервные копии\n'
+printf '  [OK] Генерация ссылок, смена имени, ключей и порта, резервные копии\n'
 printf '  [OK] Жёлтое приглашение root в Bash (в новом SSH-сеансе)\n'
 printf '  [НЕ МЕНЯЛИ] Пароль SSH и разрешение входа под root\n'
 printf '%s\n' '------------------------------------------------------------'
