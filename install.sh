@@ -15,8 +15,88 @@ STEP="предварительная проверка"
 
 say() { printf '\n\033[1;36m[Araucaria]\033[0m %s\n' "$*"; }
 warn() { printf '\n\033[1;33m[Внимание]\033[0m %s\n' "$*" >&2; }
-die() { printf '\n\033[1;31m[Ошибка]\033[0m %s\n' "$*" >&2; exit 1; }
-trap 'warn "Установка прервана (шаг: $STEP, строка: $LINENO). Рабочее SSH-подключение не закрывай. Смотри README.md."' ERR
+
+banner() {
+  printf '\n\033[1;36m%s\n  ARAUCARIA | %s\n%s\033[0m\n' \
+    '============================================================' "$1" '============================================================'
+}
+
+recovery_hint() {
+  printf '\n\033[1;33m[ЧТО ДЕЛАТЬ]\033[0m Этап: %s\n' "$STEP" >&2
+  case "$STEP" in
+    'предварительная проверка')
+      printf '  Проверь: чистая Ubuntu 22.04/24.04, root, systemd, SSH.\n  Если Xray/Araucaria уже установлен, НЕ запускай установщик снова.\n  Проверь: cat /etc/os-release; whoami; ss -ltnp\n' >&2 ;;
+    'жёлтое приглашение терминала')
+      printf '  Проверь /root/.bashrc и права записи: ls -l /root/.bashrc\n  Цвет не влияет на VPN; после исправления можно продолжить вручную.\n' >&2 ;;
+    'обновление пакетов')
+      printf '  Проверь сеть/DNS и блокировки apt: apt-get update\n  При незавершённой установке пакетов: dpkg --configure -a\n  Затем выбери повтор действия. НЕ запускай весь install.sh заново.\n' >&2 ;;
+    'проверка порта и TLS')
+      printf '  Проверь DNS/интернет VPS, доступность REALITY-цели по TLS 1.3.\n  Если сайт недоступен, выбери другое значение --target после безопасной отмены ДО настройки UFW.\n' >&2 ;;
+    'настройка файрвола')
+      printf '  Сохрани текущую SSH-сессию! Проверь: ufw status verbose\n  Убедись, что SSH-порт разрешён, и исправь проблему UFW до повтора.\n  При потере SSH используй аварийную консоль хостинга.\n' >&2 ;;
+    'настройка Fail2ban')
+      printf '  Проверь: fail2ban-client -t; systemctl status fail2ban --no-pager -l\n  Журнал: journalctl -u fail2ban -n 40 --no-pager\n  Исправь причину и повтори шаг; SSH-сессию не закрывай.\n' >&2 ;;
+    'установка Xray')
+      printf '  Проверь доступ к GitHub и свободное место: df -h\n  Проверь: systemctl status xray --no-pager -l\n  После частичной установки НЕ повторяй весь install.sh: сначала проверь результат.\n' >&2 ;;
+    'отдельный пользователь Xray'|'установка Araucaria')
+      printf '  Проверь системного пользователя и права файлов: id araucaria-xray\n  Проверь: ls -la /usr/local/etc/xray /usr/local/bin/araucaria\n  В случае частичной установки не выполняй полный install.sh повторно.\n' >&2 ;;
+    'создание и применение REALITY')
+      printf '  Проверь: systemctl status xray --no-pager -l\n  Журнал: journalctl -u xray -n 40 --no-pager\n  Не перезаписывай созданные ключи и конфиг без резервной копии.\n' >&2 ;;
+    'автоматические обновления безопасности')
+      printf '  Проверь права /etc/apt/apt.conf.d/ и свободное место.\n  Xray уже может работать; проверь araucaria status до исправления.\n' >&2 ;;
+    'проверка состояния')
+      printf '  Проверь: araucaria status; systemctl status xray fail2ban --no-pager\n  Журналы: journalctl -u xray -n 40 --no-pager\n' >&2 ;;
+    *)
+      printf '  Проверь вывод выше и README.md; устрани причину перед повтором.\n' >&2 ;;
+  esac
+  printf '  Не закрывай SSH до проверки повторного входа.\n' >&2
+}
+
+die() {
+  printf '\n\033[1;31m[ОШИБКА]\033[0m %s\n' "$*" >&2
+  recovery_hint
+  exit 1
+}
+
+on_unexpected_error() {
+  local status="$1" line="$2"
+  trap - ERR
+  printf '\n\033[1;31m[СБОЙ]\033[0m Этап: %s; строка: %s; код завершения: %s\n' \
+    "$STEP" "$line" "$status" >&2
+  recovery_hint
+  exit "$status"
+}
+trap 'on_unexpected_error "$?" "$LINENO"' ERR
+
+# Retry only operations that can be safely attempted again in THIS process.
+# Never silently skip firewall, SSH protection or Xray failures.
+retry_command() {
+  local action="$1" remedy="$2" exit_code reply
+  shift 2
+  while true; do
+    if "$@"; then
+      return 0
+    else
+      exit_code=$?
+    fi
+    warn "Не удалось: $action (код $exit_code). Возможная причина: $remedy"
+    if [[ "$ASSUME_YES" == 'yes' || ! -t 0 ]]; then
+      die "Автоматический пропуск невозможен. Устрани ошибку и проверь частичную установку."
+    fi
+    recovery_hint
+    while true; do
+      if ! IFS= read -r -p 'Исправь проблему (можно в другой SSH-сессии). Enter/r — повторить, q — остановиться: ' reply; then
+        die 'Ввод прерван. Установка остановлена безопасно.'
+      fi
+      case "$reply" in
+        ''|r|retry) break ;;
+        q|quit) die 'Установка остановлена пользователем. Исправь проблему до новой попытки.' ;;
+        *) warn 'Введи Enter или r для повтора, q для остановки.' ;;
+      esac
+    done
+  done
+}
+
 
 help() {
   cat <<'EOF'
