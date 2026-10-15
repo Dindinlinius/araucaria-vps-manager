@@ -172,7 +172,7 @@ class XrayUpdateTests(unittest.TestCase):
         self.assertEqual(self.conf.read_bytes(), before)
         self.assertFalse(self.pending.exists())
         self.assertIn('ТЕСТОВЫЙ РЕЖИМ', stdout)
-        self.assertIn('Обновление подтверждено: Xray v26.3.27 -> v26.3.27', stdout)
+        self.assertIn('Тестовая переустановка Xray v26.3.27 подтверждена.', stdout)
         self.assertIn('Главная vless ссылка не изменилась', stdout)
 
     def test_reinstall_current_version_no_restores_original_binary(self):
