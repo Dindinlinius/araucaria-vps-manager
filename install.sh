@@ -389,17 +389,30 @@ retry_command 'ожидание готовности Fail2ban' 'служба е�
 fail2ban-client status sshd
 
 STEP='установка Xray'
-say 'Скачиваем официальный установщик XTLS/Xray-install...'
+# The official XTLS installer is pinned and checksum-verified. The *Xray core*
+# installed by it is the newest non-prerelease from XTLS/Xray-core releases/latest.
+# Review and change the pin deliberately when publishing a new Araucaria release.
+XRAY_INSTALL_REF='e741a4f56d368afbb9e5be3361b40c4552d3710d'
+XRAY_INSTALL_SHA256='7f70c95f6b418da8b4f4883343d602964915e28748993870fd554383afdbe555'
+say 'Скачиваем проверенную редакцию официального установщика XTLS/Xray-install...'
 INSTALLER="$(mktemp /tmp/araucaria-xray-install-XXXXXXXX.sh)"
 cleanup() { rm -f -- "${INSTALLER:-}"; }
 trap cleanup EXIT
 retry_command 'скачивание официального установщика Xray' 'проверь доступ к raw.githubusercontent.com, DNS и сертификаты' \
   curl --fail --location --silent --show-error --retry 3 --connect-timeout 15 --max-time 120 \
-  https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh \
+  "https://raw.githubusercontent.com/XTLS/Xray-install/${XRAY_INSTALL_REF}/install-release.sh" \
   --output "$INSTALLER"
-[[ -s "$INSTALLER" ]] || die 'Не удалось скачать установщик Xray.'
+[[ -s "$INSTALLER" ]] || die 'Не удалось скачать официальный установщик Xray.'
+printf '%s  %s\n' "$XRAY_INSTALL_SHA256" "$INSTALLER" | sha256sum -c - || \
+  die 'Контрольная сумма официального установщика Xray не совпала. Запуск запрещён. Проверь соединение и источник файла.'
+bash -n "$INSTALLER" || die 'Установщик Xray содержит синтаксическую ошибку; запуск запрещён.'
+say 'Устанавливаем последний официальный стабильный выпуск Xray-core (без beta/pre-release)...'
 retry_command 'установка Xray-core' 'проверь логи выше, связь с GitHub и df -h; повтор безопасен только после проверки состояния' bash "$INSTALLER" install
 command -v xray >/dev/null || die 'Xray отсутствует после работы установщика.'
+XRAY_INSTALLED_VERSION="$(xray version | awk 'NR==1 {print $2}')"
+[[ "$XRAY_INSTALLED_VERSION" =~ ^[0-9]+[.][0-9]+[.][0-9]+$ ]] || \
+  die 'Xray установлен, но его версия не определена. Проверь: xray version.'
+say "Официальный стабильный Xray-core: v$XRAY_INSTALLED_VERSION"
 
 STEP='отдельный пользователь Xray'
 say 'Создаём пользователя службы (НЕ меняем SSH-пользователя)...'
