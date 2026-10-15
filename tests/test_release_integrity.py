@@ -35,7 +35,7 @@ class ReleaseIntegrityTests(unittest.TestCase):
 
     def test_mit_license_is_present_and_documented(self):
         license_text = (ROOT / 'LICENSE').read_text(encoding='utf-8')
-        self.assertTrue(license_text.startswith('MIT License\\n'.replace('\\n', '\n')))
+        self.assertTrue(license_text.startswith('MIT License'))
         self.assertIn('Copyright (c) 2026 Dindinlinius', license_text)
         self.assertIn('The above copyright notice and this permission notice', license_text)
         self.assertIn('MIT License', self.docs)
