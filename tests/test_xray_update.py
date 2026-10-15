@@ -94,6 +94,7 @@ class XrayUpdateTests(unittest.TestCase):
         self.assertFalse(self.pending.exists())
         self.assertEqual(len(list(self.backups.glob('xray-*.bin'))), 1)
         self.assertIn('Главная vless ссылка не изменилась', stdout)
+        self.assertIn('Открой ВПН-клиент и проверь подключение, пока SSH-сессия остаётся открытой.', stdout)
         self.assertIn('Обновление подтверждено', stdout)
 
     def test_no_restores_original_binary_and_port(self):
