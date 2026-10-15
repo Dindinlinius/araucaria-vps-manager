@@ -862,7 +862,7 @@ def _xray_restore_previous():
         )
     XRAY_PENDING.unlink(missing_ok=True)
     print(f'\nОткат выполнен: восстановлена версия {metadata["previous_version"]}.')
-    print('Xray запущен, предыдущий порт слушается. Проверь VPN в Hiddify.')
+    print('Xray запущен, предыдущий порт слушается. Проверь подключение в ВПН-клиенте.')
     print(f'Резервная копия сохранена: {backup}')
 
 
@@ -921,19 +921,39 @@ def xray_update(args):
                 'Xray не работает до обновления. Сначала проверь araucaria status.'
             )
         before_ver = _xray_version()
-        new_ver = _xray_release()
-        if _xray_version_parts(new_ver) <= _xray_version_parts(before_ver):
-            print(f'Xray {before_ver}: более новая стабильная версия не обнаружена.')
-            return
+        latest = _xray_release()
+        test_reinstall = getattr(args, 'test_reinstall', False)
+        if test_reinstall:
+            # Restrict the test to exactly the current official stable version.
+            # The flag must never silently upgrade or downgrade Xray.
+            if latest != before_ver:
+                raise AraucariaError(
+                    f'Тестовая переустановка разрешена только для последней стабильной '
+                    f'версии Xray ({latest}). Сейчас установлена {before_ver}. '
+                    'Если доступно обновление, используй araucaria xray update.'
+                )
+            new_ver = before_ver
+        else:
+            new_ver = latest
+            if _xray_version_parts(new_ver) <= _xray_version_parts(before_ver):
+                print(f'Xray {before_ver}: более новая стабильная версия не обнаружена.')
+                return
         print('\n' + '=' * 58)
         print('  ARAUCARIA | ОБНОВЛЕНИЕ XRAY')
         print('=' * 58)
         print(f'Старая версия: {before_ver}')
         print(f'Новая версия:  {new_ver}')
+        if test_reinstall:
+            print('ТЕСТОВЫЙ РЕЖИМ: повторно установим текущую стабильную версию Xray.')
+            print('Это НЕ обновление версии: проверяем перезапуск и откат на реальном сервере.')
         print('UUID, ключи, порт и конфигурация VLESS изменяться не будут.')
         print('Текущее VPN-соединение ненадолго прервётся при перезапуске Xray.')
         try:
-            consent = input('Установить новую версию? Напиши yes, чтобы продолжить: ').strip().lower()
+            if test_reinstall:
+                prompt = 'Для ТЕСТОВОЙ ПЕРЕУСТАНОВКИ введи yes, иначе отмена: '
+            else:
+                prompt = 'Установить новую версию? Напиши yes, чтобы продолжить: '
+            consent = input(prompt).strip().lower()
         except (EOFError, KeyboardInterrupt):
             raise AraucariaError('Обновление отменено до внесения изменений.')
         if consent != 'yes':
@@ -1076,6 +1096,10 @@ def create_parser():
     engine_commands.add_parser('check', help='Показать версии Xray')
     update = engine_commands.add_parser('update', help='Обновить Xray с проверкой VPN и откатом')
     update.add_argument('--ip', help='Публичный IPv4 сервера для проверки VLESS-ссылки')
+    update.add_argument(
+        '--test-reinstall', action='store_true',
+        help='ТЕСТ: переустановить ту же стабильную версию Xray для проверки yes/no и отката'
+    )
     engine_commands.add_parser('rollback', help='Восстановить Xray после прерванного обновления')
     commands.add_parser('commands', help='Показать команды управления')
     return p
