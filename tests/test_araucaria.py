@@ -397,6 +397,12 @@ class PortChangeTests(unittest.TestCase):
 
 
 class InstallerRecoveryUXTests(unittest.TestCase):
+    def test_final_report_has_no_broken_color_hint(self):
+        source = (MODULE_PATH.parent / 'install.sh').read_text(encoding='utf-8')
+        self.assertNotIn('[ПОДСКАЗКА: ЦВЕТ ТЕРМИНАЛА]', source)
+        self.assertNotIn("nprintf '", source)
+        self.assertIn("printf 'ВАЖНО: не закрывай текущую SSH-сессию", source)
+
     def test_recovery_messages_and_retry_controls_are_present(self):
         source = (MODULE_PATH.parent / 'install.sh').read_text(encoding='utf-8')
         self.assertIn('retry_command() {', source)
