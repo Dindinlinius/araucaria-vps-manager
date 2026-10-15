@@ -466,8 +466,6 @@ fi
 # This block is separate so the operator can find the commands at a glance.
 /usr/local/bin/araucaria commands
 printf 'ВАЖНО: не закрывай текущую SSH-сессию до проверки второго входа!\n'
-printf '\n\033[1;33m[ПОДСКАЗКА: ЦВЕТ ТЕРМИНАЛА]\033[0m\n'\nprintf 'В этой SSH-сессии цвет пока не изменился: установщик запущен отдельным Bash.\n'\nprintf 'Чтобы включить жёлтое имя прямо сейчас, выполни после установки:\n'\nprintf '  source /root/.bashrc\n'\nprintf 'В следующем SSH-сеансе цвет загрузится автоматически.\n'
-printf 'Новая VLESS-ссылка секретная — не публикуй её.\n'
 if [[ -f /var/run/reboot-required ]]; then
   warn 'Ubuntu сообщает, что для обновлений потребуется перезагрузка. Не спеши: сперва проверь SSH-доступ.'
 fi
