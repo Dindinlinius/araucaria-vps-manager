@@ -1026,7 +1026,10 @@ def xray_update(args):
                     if not service_ok(port):
                         raise AraucariaError('Xray перестал отвечать до подтверждения.')
                     XRAY_PENDING.unlink(missing_ok=True)
-                    print(f'\nОбновление подтверждено: Xray {before_ver} -> {new_ver}.')
+                    if test_reinstall:
+                        print(f'\nТестовая переустановка Xray {new_ver} подтверждена.')
+                    else:
+                        print(f'\nОбновление подтверждено: Xray {before_ver} -> {new_ver}.')
                     print(f'Старый исполняемый файл сохранён: {old_binary}')
                     return
                 print('\nПользователь сообщил об ошибке. Возвращаем предыдущую версию...')
