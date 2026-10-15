@@ -73,10 +73,10 @@ class XrayUpdateTests(unittest.TestCase):
             return binary
         stack.enter_context(mock.patch.object(a, '_download_xray_candidate', side_effect=create_download))
 
-    def call_update(self, answers):
+    def call_update(self, answers, test_reinstall=False):
         with (mock.patch('builtins.input', side_effect=answers),
               contextlib.redirect_stdout(io.StringIO()) as output):
-            a.xray_update(SimpleNamespace(ip=None))
+            a.xray_update(SimpleNamespace(ip=None, test_reinstall=test_reinstall))
         return output.getvalue()
 
     def test_yes_keeps_new_binary_and_preserves_vless_config(self):
@@ -162,6 +162,47 @@ class XrayUpdateTests(unittest.TestCase):
             a.xray_update(SimpleNamespace(ip=None))
         self.assertEqual(self.xray.read_bytes(), b'OLD')
 
+    def test_reinstall_current_version_yes_keeps_new_binary(self):
+        self.fixture()
+        before = self.conf.read_bytes()
+        with (mock.patch.object(a, '_xray_release', return_value='v26.3.27'),
+              mock.patch.object(a, '_xray_version', return_value='v26.3.27')):
+            stdout = self.call_update(['yes', 'yes'], test_reinstall=True)
+        self.assertEqual(self.xray.read_bytes(), b'NEW')
+        self.assertEqual(self.conf.read_bytes(), before)
+        self.assertFalse(self.pending.exists())
+        self.assertIn('ТЕСТОВЫЙ РЕЖИМ', stdout)
+        self.assertIn('Обновление подтверждено: Xray v26.3.27 -> v26.3.27', stdout)
+        self.assertIn('Главная vless ссылка не изменилась', stdout)
+
+    def test_reinstall_current_version_no_restores_original_binary(self):
+        self.fixture()
+        before = self.conf.read_bytes()
+        with (mock.patch.object(a, '_xray_release', return_value='v26.3.27'),
+              mock.patch.object(a, '_xray_version', return_value='v26.3.27')):
+            stdout = self.call_update(['yes', 'no'], test_reinstall=True)
+        self.assertEqual(self.xray.read_bytes(), b'OLD')
+        self.assertEqual(self.conf.read_bytes(), before)
+        self.assertFalse(self.pending.exists())
+        self.assertIn('Откат выполнен', stdout)
+        self.assertIn('Проверь подключение в ВПН-клиенте', stdout)
+
+    def test_reinstall_rejects_old_version_to_avoid_implicit_upgrade(self):
+        self.fixture()
+        with self.assertRaisesRegex(a.AraucariaError, 'разрешена только для последней стабильной'):
+            self.call_update(['yes', 'yes'], test_reinstall=True)
+        self.assertEqual(self.xray.read_bytes(), b'OLD')
+        self.assertFalse(self.pending.exists())
+
+    def test_reinstall_confirmation_cancel_does_not_restart(self):
+        self.fixture()
+        with (mock.patch.object(a, '_xray_release', return_value='v26.3.27'),
+              mock.patch.object(a, '_xray_version', return_value='v26.3.27')):
+            stdout = self.call_update(['no'], test_reinstall=True)
+        self.assertIn('Обновление отменено', stdout)
+        self.assertEqual(self.xray.read_bytes(), b'OLD')
+        self.assertFalse(self.pending.exists())
+
     def test_only_newer_stable_release_can_be_installed(self):
         self.fixture()
         with mock.patch.object(a, '_xray_release', return_value='v26.3.27'):
@@ -184,6 +225,10 @@ class XrayUpdateTests(unittest.TestCase):
             parsed = parser.parse_args(['xray', action])
             self.assertEqual(parsed.action, 'xray')
             self.assertEqual(parsed.xray_action, action)
+        test_mode = parser.parse_args(['xray', 'update', '--test-reinstall'])
+        self.assertTrue(test_mode.test_reinstall)
+        normal = parser.parse_args(['xray', 'update'])
+        self.assertFalse(normal.test_reinstall)
 
     def test_sha256_digest_verifies_before_execution(self):
         archive = io.BytesIO()
