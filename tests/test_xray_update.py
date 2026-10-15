@@ -184,8 +184,10 @@ class XrayUpdateTests(unittest.TestCase):
             parsed = parser.parse_args(['xray', action])
             self.assertEqual(parsed.action, 'xray')
             self.assertEqual(parsed.xray_action, action)
-        with self.assertRaises(SystemExit):
+        with (self.assertRaises(SystemExit),
+              contextlib.redirect_stderr(io.StringIO()) as errors):
             parser.parse_args(['xray', 'update', '--test-reinstall'])
+        self.assertIn('--test-reinstall', errors.getvalue())
 
     def test_sha256_digest_verifies_before_execution(self):
         archive = io.BytesIO()
