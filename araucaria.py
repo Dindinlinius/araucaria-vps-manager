@@ -921,20 +921,13 @@ def xray_update(args):
                 'Xray не работает до обновления. Сначала проверь araucaria status.'
             )
         before_ver = _xray_version()
-        latest = _xray_release()
         test_reinstall = getattr(args, 'test_reinstall', False)
         if test_reinstall:
-            # Restrict the test to exactly the current official stable version.
-            # The flag must never silently upgrade or downgrade Xray.
-            if latest != before_ver:
-                raise AraucariaError(
-                    f'Тестовая переустановка разрешена только для последней стабильной '
-                    f'версии Xray ({latest}). Сейчас установлена {before_ver}. '
-                    'Если доступно обновление, используй araucaria xray update.'
-                )
+            # No upgrade or downgrade: test with the exact installed release tag.
+            # The official archive/digest must exist; otherwise fail before live changes.
             new_ver = before_ver
         else:
-            new_ver = latest
+            new_ver = _xray_release()
             if _xray_version_parts(new_ver) <= _xray_version_parts(before_ver):
                 print(f'Xray {before_ver}: более новая стабильная версия не обнаружена.')
                 return
