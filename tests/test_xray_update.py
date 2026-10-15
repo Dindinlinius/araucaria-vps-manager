@@ -190,7 +190,8 @@ class XrayUpdateTests(unittest.TestCase):
         with zipfile.ZipFile(archive, 'w') as zipped:
             zipped.writestr('xray', b'Xray-binary-placeholder')
         zipped_bytes = archive.getvalue()
-        good_checksum = 'SHA256= ' + hashlib.sha256(zipped_bytes).hexdigest() + '\n'
+        # Official Xray release digests may use OpenSSL's SHA2-256 label.
+        good_checksum = 'SHA2-256= ' + hashlib.sha256(zipped_bytes).hexdigest() + '\n'
         with tempfile.TemporaryDirectory() as directory:
             with (mock.patch.object(a.platform, 'machine', return_value='x86_64'),
                   mock.patch.object(a, '_xray_fetch_bytes', side_effect=[
