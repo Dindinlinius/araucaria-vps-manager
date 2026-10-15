@@ -187,10 +187,24 @@ class XrayUpdateTests(unittest.TestCase):
         self.assertIn('Откат выполнен', stdout)
         self.assertIn('Проверь подключение в ВПН-клиенте', stdout)
 
-    def test_reinstall_rejects_old_version_to_avoid_implicit_upgrade(self):
+    def test_reinstall_uses_installed_tag_without_querying_latest(self):
         self.fixture()
-        with self.assertRaisesRegex(a.AraucariaError, 'разрешена только для последней стабильной'):
-            self.call_update(['yes', 'yes'], test_reinstall=True)
+        # Latest release may differ or be GitHub-marked as prerelease.
+        # A same-version test must never accidentally upgrade or downgrade.
+        with (mock.patch.object(a, '_xray_release', side_effect=AssertionError('Latest must not be called')),
+              mock.patch.object(a, '_xray_version', return_value='v26.3.27')):
+            stdout = self.call_update(['yes', 'no'], test_reinstall=True)
+        self.assertIn('ТЕСТОВЫЙ РЕЖИМ', stdout)
+        self.assertEqual(self.xray.read_bytes(), b'OLD')
+        self.assertFalse(self.pending.exists())
+
+    def test_reinstall_without_release_archive_does_not_replace_binary(self):
+        self.fixture()
+        with (mock.patch.object(a, '_xray_version', return_value='v26.3.27'),
+              mock.patch.object(a, '_download_xray_candidate',
+                                side_effect=a.AraucariaError('Официальный архив версии отсутствует'))):
+            with self.assertRaisesRegex(a.AraucariaError, 'Официальный архив версии отсутствует'):
+                self.call_update(['yes'], test_reinstall=True)
         self.assertEqual(self.xray.read_bytes(), b'OLD')
         self.assertFalse(self.pending.exists())
 
