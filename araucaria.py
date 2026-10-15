@@ -1042,6 +1042,9 @@ def show_commands(_args=None):
     print('  vless-name           Переименовать профиль (через ввод)')
     print('  vless-name "Мой VPN" Переименовать профиль сразу')
     print('  araucaria status     Проверить Xray, UFW и Fail2ban')
+    print('  araucaria xray check   Проверить новую стабильную версию Xray')
+    print('  araucaria xray update  Обновить Xray с проверкой VPN и откатом')
+    print('  araucaria xray rollback  Откат незавершённого обновления')
     print('  araucaria commands   Показать это меню команд')
     print('  araucaria --help     Полная справка')
     print('\x1b[1;36m' + '=' * 60 + '\x1b[0m\n')
@@ -1068,6 +1071,12 @@ def create_parser():
     name_p = commands.add_parser('name', help='Переименовать VLESS-ссылку без перезапуска Xray')
     name_p.add_argument('name', nargs='?', help='Новое имя (до 64 символов, в кавычках если есть пробелы)')
     name_p.add_argument('--ip', help='Внешний IPv4 для готовой ссылки')
+    engine = commands.add_parser('xray', help='Проверка и безопасное обновление Xray-core')
+    engine_commands = engine.add_subparsers(dest='xray_action', required=True)
+    engine_commands.add_parser('check', help='Показать версии Xray')
+    update = engine_commands.add_parser('update', help='Обновить Xray с проверкой VPN и откатом')
+    update.add_argument('--ip', help='Публичный IPv4 сервера для проверки VLESS-ссылки')
+    engine_commands.add_parser('rollback', help='Восстановить Xray после прерванного обновления')
     commands.add_parser('commands', help='Показать команды управления')
     return p
 
@@ -1090,9 +1099,13 @@ def main(argv=None):
         parser.print_help()
         return 0
     try:
-        {'init': init, 'rotate': rotate, 'link': show_link,
-         'status': show_status, 'port': switch_vless_port, 'name': rename_vless,
-         'commands': show_commands}[args.action](args)
+        if args.action == 'xray':
+            {'check': xray_check, 'update': xray_update,
+             'rollback': xray_rollback}[args.xray_action](args)
+        else:
+            {'init': init, 'rotate': rotate, 'link': show_link,
+             'status': show_status, 'port': switch_vless_port, 'name': rename_vless,
+             'commands': show_commands}[args.action](args)
     except AraucariaError as exc:
         print(f'Ошибка: {exc}', file=sys.stderr)
         return 1
