@@ -33,6 +33,14 @@ class ReleaseIntegrityTests(unittest.TestCase):
         self.assertNotIn('--test-reinstall', self.docs)
         self.assertNotIn('--test-reinstall', self.installer)
 
+    def test_mit_license_is_present_and_documented(self):
+        license_text = (ROOT / 'LICENSE').read_text(encoding='utf-8')
+        self.assertTrue(license_text.startswith('MIT License\\n'.replace('\\n', '\n')))
+        self.assertIn('Copyright (c) 2026 Dindinlinius', license_text)
+        self.assertIn('The above copyright notice and this permission notice', license_text)
+        self.assertIn('MIT License', self.docs)
+        self.assertIn('[LICENSE](LICENSE)', self.docs)
+
     def test_user_facing_console_report_remains_clean(self):
         self.assertNotIn('[ПОДСКАЗКА: ЦВЕТ ТЕРМИНАЛА]', self.installer)
         self.assertNotIn("nprintf '", self.installer)
