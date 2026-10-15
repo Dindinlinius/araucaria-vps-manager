@@ -82,14 +82,18 @@ class XrayUpdateTests(unittest.TestCase):
     def test_yes_keeps_new_binary_and_preserves_vless_config(self):
         self.fixture()
         before = self.conf.read_bytes()
-        stdout = self.call_update(['yes', 'yes'])
+        with mock.patch('builtins.input', side_effect=['yes', 'yes']) as fake_input:
+            with contextlib.redirect_stdout(io.StringIO()) as screen:
+                a.xray_update(SimpleNamespace(ip=None))
+        stdout = screen.getvalue()
+        confirm_prompt = fake_input.call_args_list[1].args[0]
+        self.assertIn('\\x1b[1;36myes\\x1b[0m'.encode('utf-8').decode('unicode_escape'), confirm_prompt)
+        self.assertIn('\\x1b[1;36mno\\x1b[0m'.encode('utf-8').decode('unicode_escape'), confirm_prompt)
         self.assertEqual(self.xray.read_bytes(), b'NEW')
         self.assertEqual(self.conf.read_bytes(), before)
         self.assertFalse(self.pending.exists())
         self.assertEqual(len(list(self.backups.glob('xray-*.bin'))), 1)
         self.assertIn('Главная vless ссылка не изменилась', stdout)
-        self.assertIn('\x1b[1;36myes\x1b[0m', stdout)
-        self.assertIn('\x1b[1;36mno\x1b[0m', stdout)
         self.assertIn('Обновление подтверждено', stdout)
 
     def test_no_restores_original_binary_and_port(self):
