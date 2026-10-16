@@ -321,6 +321,31 @@ class PortChangeTests(unittest.TestCase):
             self.call_change(port=56399)
         self.assertEqual(self.allowed, {56399})
 
+    def test_disabled_ufw_refuses_port_change_without_mutating_state(self):
+        before = self.config.read_bytes()
+        with mock.patch.object(a, 'ufw_status', return_value='Status: inactive'):
+            with self.assertRaisesRegex(a.AraucariaError, 'UFW не активен'):
+                self.call_change()
+        self.assertEqual(self.config.read_bytes(), before)
+        self.assertEqual(self.allowed, {56399})
+        self.assertFalse(any(cmd[:2] == ('ufw', 'allow') for cmd in self.calls))
+
+    def test_out_of_range_port_does_not_touch_firewall_or_config(self):
+        before = self.config.read_bytes()
+        with self.assertRaisesRegex(a.AraucariaError, '1024 до 65535'):
+            self.call_change(port=443)
+        self.assertEqual(self.config.read_bytes(), before)
+        self.assertEqual(self.allowed, {56399})
+        self.assertFalse(any(cmd[:2] == ('ufw', 'allow') for cmd in self.calls))
+
+    def test_invalid_interactive_port_input_is_non_destructive(self):
+        before = self.config.read_bytes()
+        with self.assertRaisesRegex(a.AraucariaError, 'Введи yes'):
+            self.call_change(port=None, with_input='no')
+        self.assertEqual(self.config.read_bytes(), before)
+        self.assertEqual(self.allowed, {56399})
+        self.assertFalse(any(cmd[:2] == ('ufw', 'allow') for cmd in self.calls))
+
     def test_port_change_rolls_back_firewall_if_xray_rejected_new_config(self):
         with mock.patch.object(a, 'apply_config', side_effect=a.AraucariaError('Xray error')):
             with self.assertRaisesRegex(a.AraucariaError, 'новый порт закрыт'):
@@ -464,6 +489,22 @@ echo 'DANGEROUS_CONTINUATION'
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('остановлена пользователем', result.stderr)
         self.assertNotIn('DANGEROUS_CONTINUATION', result.stdout)
+
+    def test_ssh_ports_are_allowed_before_ufw_enable(self):
+        installer = (MODULE_PATH.parent / 'install.sh').read_text(encoding='utf-8')
+        ssh_allow = installer.index('for ssh_port in "${SSH_PORTS[@]}"; do')
+        vpn_allow = installer.index('ufw allow "${XRAY_PORT}/tcp"')
+        firewall_enable = installer.index('ufw --force enable')
+        self.assertLess(ssh_allow, firewall_enable)
+        self.assertLess(vpn_allow, firewall_enable)
+
+    def test_preflight_refuses_existing_xray_before_any_packages_or_firewall(self):
+        installer = (MODULE_PATH.parent / 'install.sh').read_text(encoding='utf-8')
+        preflight = installer.index('for existing in /usr/local/bin/xray')
+        packages = installer.index("STEP='обновление пакетов'")
+        firewall = installer.index("STEP='настройка файрвола'")
+        self.assertLess(preflight, packages)
+        self.assertLess(preflight, firewall)
 
     def test_blue_banners_and_command_labels(self):
         source = (MODULE_PATH.parent / 'install.sh').read_text(encoding='utf-8')
