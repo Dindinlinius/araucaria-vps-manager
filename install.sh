@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Araucaria VPS Manager v0.2.0-rc2 - for a NEW Ubuntu 22.04 / 24.04 VPS.
+# Araucaria VPS Manager v1.0.0-rc1 - for a NEW Ubuntu 22.04 / 24.04 VPS.
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
