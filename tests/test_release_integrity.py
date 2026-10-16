@@ -39,7 +39,7 @@ class ReleaseIntegrityTests(unittest.TestCase):
         self.assertIn('Copyright (c) 2026 Dindinlinius', license_text)
         self.assertIn('The above copyright notice and this permission notice', license_text)
         self.assertIn('MIT License', self.docs)
-        self.assertIn('[LICENSE](LICENSE)', self.docs)
+        self.assertIn('[MIT License](LICENSE)', self.docs)
 
     def test_readme_begins_with_copyable_stable_install(self):
         intro = self.docs[:700]
