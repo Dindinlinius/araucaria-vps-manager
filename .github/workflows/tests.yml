@@ -1,0 +1,47 @@
+name: Araucaria checks
+
+on:
+  push:
+    branches:
+      - main
+      - feature/vless-port-install-report-v0.2
+      - feature/xray-confirmed-updates
+      - release/v1.0.0-rc1-prep
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Ubuntu ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Required to scan all history before going public.
+      - name: Scan full Git history for exposed secrets
+        run: python3 scripts/check_history.py
+      - name: Validate installer Bash syntax
+        run: bash -n install.sh
+      - name: Check pinned XTLS installer hash from GitHub
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref="$(sed -nE "s/^XRAY_INSTALL_REF='([a-f0-9]{40})'$/\1/p" install.sh)"
+          digest="$(sed -nE "s/^XRAY_INSTALL_SHA256='([a-f0-9]{64})'$/\1/p" install.sh)"
+          test -n "$ref" && test -n "$digest"
+          curl --fail --location --silent --show-error --retry 3 \
+            "https://raw.githubusercontent.com/XTLS/Xray-install/${ref}/install-release.sh" \
+            --output /tmp/araucaria-upstream-xray-install.sh
+          printf '%s  %s\n' "$digest" /tmp/araucaria-upstream-xray-install.sh | sha256sum -c -
+          bash -n /tmp/araucaria-upstream-xray-install.sh
+      - name: Compile Python CLI
+        run: python3 -m py_compile araucaria.py
+      - name: Run unit and name-prompt tests
+        run: python3 -m unittest discover -s tests -v
