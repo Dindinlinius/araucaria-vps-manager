@@ -39,7 +39,20 @@ class ReleaseIntegrityTests(unittest.TestCase):
         self.assertIn('Copyright (c) 2026 Dindinlinius', license_text)
         self.assertIn('The above copyright notice and this permission notice', license_text)
         self.assertIn('MIT License', self.docs)
-        self.assertIn('[LICENSE](LICENSE)', self.docs)
+        self.assertIn('[MIT License](LICENSE)', self.docs)
+
+    def test_readme_begins_with_copyable_stable_install(self):
+        intro = self.docs[:700]
+        self.assertIn('git clone --depth 1 --branch v1.0.0 ', intro)
+        self.assertIn('bash install.sh', intro)
+        self.assertIn('**Что произойдёт при запуске:**', intro)
+        self.assertIn('MIT License', self.docs)
+
+    def test_readme_excludes_old_release_markers_and_collective_voice(self):
+        self.assertNotIn('v1.0.0-rc1', self.docs)
+        self.assertNotIn('v0.2.0', self.docs)
+        self.assertNotRegex(self.docs.lower(), r'(?<![а-яё])мы(?![а-яё])')
+        self.assertIn('Я сделал Araucaria', self.docs)
 
     def test_user_facing_console_report_remains_clean(self):
         self.assertNotIn('[ПОДСКАЗКА: ЦВЕТ ТЕРМИНАЛА]', self.installer)

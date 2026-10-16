@@ -4,9 +4,9 @@ on:
   push:
     branches:
       - main
-      - feature/vless-port-install-report-v0.2
-      - feature/xray-confirmed-updates
-      - release/v1.0.0-rc1-prep
+      - release/v1.0.0-final
+    tags:
+      - 'v*'
   pull_request:
 
 permissions:
@@ -43,5 +43,16 @@ jobs:
           bash -n /tmp/araucaria-upstream-xray-install.sh
       - name: Compile Python CLI
         run: python3 -m py_compile araucaria.py
+      - name: Smoke-test safe CLI help
+        run: |
+          set -euo pipefail
+          bash install.sh --help >/dev/null
+          python3 araucaria.py --help >/dev/null
+          python3 araucaria.py xray --help >/dev/null
+          python3 araucaria.py xray update --help >/dev/null
+          if python3 araucaria.py xray update --test-reinstall >/dev/null 2>&1; then
+            echo 'Debug Xray reinstall flag must not be available' >&2
+            exit 1
+          fi
       - name: Run unit and name-prompt tests
         run: python3 -m unittest discover -s tests -v

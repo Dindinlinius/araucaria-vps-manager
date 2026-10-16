@@ -79,6 +79,46 @@ class XrayUpdateTests(unittest.TestCase):
             a.xray_update(SimpleNamespace(ip=None))
         return output.getvalue()
 
+    def test_initial_no_does_not_download_or_change_xray(self):
+        self.fixture()
+        original_config = self.conf.read_bytes()
+        with mock.patch.object(a, '_download_xray_candidate') as downloader:
+            output = self.call_update(['no'])
+        self.assertIn('Обновление отменено', output)
+        downloader.assert_not_called()
+        self.assertEqual(self.xray.read_bytes(), b'OLD')
+        self.assertEqual(self.conf.read_bytes(), original_config)
+        self.assertFalse(self.pending.exists())
+        self.assertFalse(self.backups.exists())
+
+    def test_noninteractive_update_is_rejected_before_accessing_release(self):
+        with (mock.patch.object(a, 'require_root'),
+              mock.patch.object(a.sys, 'stdin', new=SimpleNamespace(isatty=lambda: False)),
+              mock.patch.object(a, '_xray_release') as release):
+            with self.assertRaisesRegex(a.AraucariaError, 'интерактивный SSH-терминал'):
+                a.xray_update(SimpleNamespace(ip=None))
+        release.assert_not_called()
+        self.assertEqual(self.xray.read_bytes(), b'OLD')
+        self.assertFalse(self.backups.exists())
+
+    def test_unhealthy_service_blocks_update_before_download(self):
+        self.fixture()
+        with (mock.patch.object(a, 'service_ok', return_value=False),
+              mock.patch.object(a, '_download_xray_candidate') as downloader):
+            with self.assertRaisesRegex(a.AraucariaError, 'не работает до обновления'):
+                self.call_update(['yes'])
+        downloader.assert_not_called()
+        self.assertEqual(self.xray.read_bytes(), b'OLD')
+        self.assertFalse(self.pending.exists())
+
+    def test_rollback_without_pending_transaction_is_rejected(self):
+        with (mock.patch.object(a, 'require_root'),
+              mock.patch.object(a, 'run') as service_commands):
+            with self.assertRaisesRegex(a.AraucariaError, 'Нет незавершённого обновления'):
+                a.xray_rollback()
+        service_commands.assert_not_called()
+        self.assertEqual(self.xray.read_bytes(), b'OLD')
+
     def test_yes_keeps_new_binary_and_preserves_vless_config(self):
         self.fixture()
         before = self.conf.read_bytes()
@@ -188,6 +228,47 @@ class XrayUpdateTests(unittest.TestCase):
               contextlib.redirect_stderr(io.StringIO()) as errors):
             parser.parse_args(['xray', 'update', '--test-reinstall'])
         self.assertIn('--test-reinstall', errors.getvalue())
+
+    def test_release_metadata_rejects_prerelease_and_invalid_tag(self):
+        examples = [
+            {'tag_name': 'v26.9.9', 'draft': False, 'prerelease': True},
+            {'tag_name': 'v26.9.9', 'draft': True, 'prerelease': False},
+            {'tag_name': 'v26.9.9-beta', 'draft': False, 'prerelease': False},
+        ]
+        for metadata in examples:
+            with self.subTest(metadata=metadata), mock.patch.object(
+                a, '_xray_fetch_bytes', return_value=json.dumps(metadata).encode('utf-8')
+            ):
+                with self.assertRaises(a.AraucariaError):
+                    a._xray_release()
+
+    def test_verified_zip_without_xray_binary_is_rejected(self):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, 'w') as zipped:
+            zipped.writestr('README.txt', b'no executable here')
+        raw = archive.getvalue()
+        digest = ('SHA2-256= ' + hashlib.sha256(raw).hexdigest() + '\n').encode()
+        with tempfile.TemporaryDirectory() as directory:
+            with (mock.patch.object(a.platform, 'machine', return_value='x86_64'),
+                  mock.patch.object(a, '_xray_fetch_bytes', side_effect=[raw, digest])):
+                with self.assertRaisesRegex(a.AraucariaError, 'не содержит исполняемый файл'):
+                    a._download_xray_candidate('v26.9.9', Path(directory))
+
+    def test_xray_candidate_with_invalid_config_is_rejected(self):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, 'w') as zipped:
+            zipped.writestr('xray', b'candidate for bad config test')
+        raw = archive.getvalue()
+        digest = ('SHA2-256= ' + hashlib.sha256(raw).hexdigest() + '\n').encode()
+        with tempfile.TemporaryDirectory() as directory:
+            with (mock.patch.object(a.platform, 'machine', return_value='x86_64'),
+                  mock.patch.object(a, '_xray_fetch_bytes', side_effect=[raw, digest]),
+                  mock.patch.object(a, '_xray_version', return_value='v26.9.9'),
+                  mock.patch.object(a.subprocess, 'run', return_value=SimpleNamespace(
+                      returncode=1, stdout='', stderr='invalid REALITY config'
+                  ))):
+                with self.assertRaisesRegex(a.AraucariaError, 'не принимает текущую конфигурацию'):
+                    a._download_xray_candidate('v26.9.9', Path(directory))
 
     def test_sha256_digest_verifies_before_execution(self):
         archive = io.BytesIO()
